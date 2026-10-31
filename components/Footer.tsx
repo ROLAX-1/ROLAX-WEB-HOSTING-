@@ -9,12 +9,7 @@ export default function Footer() {
         <div className="grid md:grid-cols-4 gap-8 mb-8">
           <div>
             <div className="flex items-center gap-3 mb-3">
-              <div className="grid grid-cols-2 gap-[2px] w-9 h-9 rounded-lg overflow-hidden border border-[#222] bg-black p-[2px]">
-                <img src="/images/rolax-cyber-1.jpg" alt="R1" className="w-full h-full object-cover rounded-sm" />
-                <img src="/images/rolax-cyber-2.jpg" alt="R2" className="w-full h-full object-cover rounded-sm" />
-                <img src="/images/rolax-cyber-3.jpg" alt="R3" className="w-full h-full object-cover rounded-sm" />
-                <img src="/images/rolax-cyber-4.jpg" alt="R4" className="w-full h-full object-cover rounded-sm" />
-              </div>
+              <img src="/images/rolax-logo-new.jpg" alt="ROLAX HOST" className="w-9 h-9 rounded-xl object-cover border border-[#222] bg-black" />
               <span className="font-grotesk font-bold">{settings.logoText}</span>
             </div>
             <p className="text-sm text-[#888] leading-relaxed">{settings.footerText}</p>
