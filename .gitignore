@@ -4,3 +4,9 @@ node_modules
 .npm
 out
 dist
+.cache
+.local
+.config
+uploads
+.next
+.vercel

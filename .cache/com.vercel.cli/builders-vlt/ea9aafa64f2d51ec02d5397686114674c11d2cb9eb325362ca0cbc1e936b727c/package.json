@@ -1,8 +1,0 @@
-{
-  "name": "vercel-pinned-builder",
-  "private": true,
-  "dependencies": {
-    "@vercel/next": "28.0.1",
-    "@vercel/build-utils": "15.2.1"
-  }
-}
