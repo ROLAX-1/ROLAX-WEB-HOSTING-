@@ -285,13 +285,14 @@ export default function DashboardPage() {
 
             {!selectedPlan ? (
               <div>
-                <p className="text-sm text-[#888]">Select a plan to pay with crypto (BEP-20 Only)</p>
+                <p className="text-sm text-[#888]">Select a plan to pay with crypto (BEP-20 Only) • Contact: <a href="https://t.me/Rolax112" target="_blank" className="text-[#00D4FF]">t.me/Rolax112</a> only</p>
                 <div className="grid md:grid-cols-3 gap-4 mt-4">
                   {plans.map(plan => (
-                    <div key={plan.id} className="rounded-2xl bg-[#111] border border-[#222] p-5">
+                    <div key={plan.id} className={`rounded-2xl p-5 border ${plan.price === 0 ? "bg-[#111] border-[#222] opacity-75" : "bg-[#111] border-[#222]"}`}>
                       <h4 className="font-semibold">{plan.name}</h4>
-                      <p className="text-xl font-bold">${plan.price}</p>
-                      <button onClick={() => setSelectedPlan(plan)} className="mt-3 w-full py-2 rounded-full bg-white text-black text-sm font-medium">Select Plan</button>
+                      <p className="text-xl font-bold">${plan.price} <span className="text-xs text-[#666]">/mo</span></p>
+                      <p className="text-xs text-[#666] mt-1">{plan.price === 0 ? "Free Forever" : "BEP-20 Crypto Only"}</p>
+                      <button onClick={() => { if (plan.price === 0) { toast("Starter is free! No payment needed.", "info"); return; } setSelectedPlan(plan); }} className={`mt-3 w-full py-2 rounded-full text-sm font-medium ${plan.price === 0 ? "bg-[#222] text-[#666] border border-[#333]" : "bg-white text-black"}`}>{plan.price === 0 ? "Free - Active" : "Select Plan"}</button>
                     </div>
                   ))}
                 </div>
@@ -312,14 +313,24 @@ export default function DashboardPage() {
             ) : (
               <div className="rounded-2xl bg-[#111] border border-[#222] p-6 md:p-8">
                 <button onClick={() => setSelectedPlan(null)} className="text-xs text-[#888] hover:text-white mb-4">← Back to plans</button>
+                {selectedPlan.price === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-2xl font-bold">Free Plan - No Payment Required</p>
+                    <p className="text-sm text-[#888] mt-2">Starter is free forever. Just deploy your project.</p>
+                    <button onClick={() => setSelectedPlan(null)} className="mt-4 px-6 py-2 rounded-full bg-white text-black text-sm">Go to Deploy</button>
+                  </div>
+                ) : (
+                <>
                 <h3 className="font-grotesk text-xl font-bold">Pay with Crypto (BEP-20 Only)</h3>
                 <p className="text-sm text-[#888] mt-1">Plan: <span className="text-white font-medium">{selectedPlan.name} - ${selectedPlan.price}</span></p>
 
-                <div className="mt-6 flex gap-3">
-                  {wallets.map(w => (
-                    <button key={w.id} onClick={() => setPayCoin(w.symbol)} className={`px-4 py-2 rounded-full text-sm border ${payCoin === w.symbol ? "bg-white text-black border-white" : "bg-black border-[#222] text-[#888]"}`}>{w.symbol} ({w.network})</button>
+                <div className="mt-6 flex gap-3 flex-wrap">
+                  {wallets.filter(w => ["BNB","USDT"].includes(w.symbol)).map(w => (
+                    <button key={w.id} onClick={() => setPayCoin(w.symbol)} className={`px-4 py-2 rounded-full text-sm border ${payCoin === w.symbol ? "bg-white text-black border-white" : "bg-black border-[#222] text-[#888]"}`}>{w.symbol} • {w.network}</button>
                   ))}
+                  {wallets.filter(w => ["BNB","USDT"].includes(w.symbol)).length === 0 && <span className="text-xs text-[#666]">No wallets configured</span>}
                 </div>
+                {wallets.some(w => !["BNB","USDT"].includes(w.symbol)) && <p className="text-[11px] text-[#666] mt-2">* UPI & other methods removed - Crypto only (BEP-20)</p>}
 
                 <div className="mt-6">
                   <div className="space-y-4">
@@ -356,6 +367,8 @@ export default function DashboardPage() {
                     <p className="text-xs text-[#666] text-center">Your plan will be activated after admin approves (within 24h)</p>
                   </div>
                 </div>
+                  </>
+                )}
               </div>
             )}
           </div>

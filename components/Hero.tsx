@@ -77,6 +77,26 @@ export default function Hero() {
           </div>
         </motion.div>
 
+        {/* 4-Image Showcase - Premium Cyber Hosting */}
+        <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="mt-12 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-5xl mx-auto">
+          {[
+            { img: "/images/rolax-cyber-1.jpg", title: "Elite Hosting", desc: "Anonymous Premium" },
+            { img: "/images/rolax-cyber-2.jpg", title: "Global Network", desc: "300+ Edge Nodes" },
+            { img: "/images/rolax-cyber-3.jpg", title: "Cyber Security", desc: "99.9% Uptime" },
+            { img: "/images/rolax-cyber-4.jpg", title: "Instant Deploy", desc: "2.4s Live" },
+          ].map((item, i) => (
+            <div key={i} className="group relative rounded-2xl overflow-hidden bg-[#111] border border-[#222] hover:border-[#6C5CE7]/50 transition">
+              <img src={item.img} alt={item.title} className="w-full h-40 object-cover group-hover:scale-105 transition duration-500" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+              <div className="absolute bottom-0 left-0 right-0 p-3">
+                <p className="text-xs font-grotesk font-semibold text-white">{item.title}</p>
+                <p className="text-[10px] text-[#888]">{item.desc}</p>
+              </div>
+              <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#00ff88] animate-pulse" />
+            </div>
+          ))}
+        </motion.div>
+
         {/* Logos */}
         <div className="mt-12 flex flex-wrap items-center justify-center gap-6 md:gap-10 opacity-30 text-xs tracking-widest">
           <span>NODE.JS</span><span>PYTHON</span><span>HTML</span><span>GITHUB</span><span>GITLAB</span><span>VERCEL</span>

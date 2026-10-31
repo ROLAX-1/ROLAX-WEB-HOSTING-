@@ -8,8 +8,13 @@ export default function Footer() {
       <div className="max-w-7xl mx-auto px-4 md:px-6 py-12">
         <div className="grid md:grid-cols-4 gap-8 mb-8">
           <div>
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#6C5CE7] to-[#00D4FF] flex items-center justify-center font-bold text-sm">R</div>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="grid grid-cols-2 gap-[2px] w-9 h-9 rounded-lg overflow-hidden border border-[#222] bg-black p-[2px]">
+                <img src="/images/rolax-cyber-1.jpg" alt="R1" className="w-full h-full object-cover rounded-sm" />
+                <img src="/images/rolax-cyber-2.jpg" alt="R2" className="w-full h-full object-cover rounded-sm" />
+                <img src="/images/rolax-cyber-3.jpg" alt="R3" className="w-full h-full object-cover rounded-sm" />
+                <img src="/images/rolax-cyber-4.jpg" alt="R4" className="w-full h-full object-cover rounded-sm" />
+              </div>
               <span className="font-grotesk font-bold">{settings.logoText}</span>
             </div>
             <p className="text-sm text-[#888] leading-relaxed">{settings.footerText}</p>

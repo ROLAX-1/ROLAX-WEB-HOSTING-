@@ -23,8 +23,13 @@ export default function Navbar() {
   return (
     <nav className={`fixed top-0 left-0 right-0 z-50 transition-all ${scrolled ? "bg-black/80 backdrop-blur-xl border-b border-[#222]" : "bg-transparent border-b border-transparent"}`}>
       <div className="max-w-7xl mx-auto px-4 md:px-6 h-[64px] flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#6C5CE7] to-[#00D4FF] flex items-center justify-center font-bold text-sm">R</div>
+        <Link href="/" className="flex items-center gap-3">
+          <div className="grid grid-cols-2 gap-[2px] w-9 h-9 rounded-lg overflow-hidden border border-[#222] bg-black p-[2px]">
+            <img src="/images/rolax-cyber-1.jpg" alt="R1" className="w-full h-full object-cover rounded-sm" />
+            <img src="/images/rolax-cyber-2.jpg" alt="R2" className="w-full h-full object-cover rounded-sm" />
+            <img src="/images/rolax-cyber-3.jpg" alt="R3" className="w-full h-full object-cover rounded-sm" />
+            <img src="/images/rolax-cyber-4.jpg" alt="R4" className="w-full h-full object-cover rounded-sm" />
+          </div>
           <span className="font-grotesk font-bold text-[18px] tracking-tight">{settings.logoText}</span>
           <span className="hidden md:inline text-[10px] bg-[#111] border border-[#222] px-2 py-1 rounded-full text-[#888] ml-2">BETA</span>
         </Link>
