@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useStore, ADMIN_EMAIL } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
-import { QRCodeSVG } from "qrcode.react";
 import Link from "next/link";
 
 export default function DashboardPage() {
@@ -42,7 +41,10 @@ export default function DashboardPage() {
   const handleDeploy = () => {
     if (!deployData.name.trim()) { toast("Project name required", "error"); return; }
     const url = `${deployData.name.toLowerCase().replace(/\s+/g, "-")}.rolax.host`;
-    const newSite = {
+    // Determine bot/file type based on stack
+    const fileTypeMap: any = { "HTML": "HTML Website", "Node.js": "Node.js Bot", "Python": "Python Bot" };
+    const botTypeMap: any = { "HTML": "Static Site", "Node.js": "Discord/Telegram Bot", "Python": "Telegram Bot" };
+    const newSite: any = {
       id: "ws_" + Date.now(),
       userId: auth.id,
       name: deployData.name,
@@ -51,6 +53,11 @@ export default function DashboardPage() {
       status: "Running" as const,
       cpu: Math.floor(Math.random() * 40) + 10,
       ram: Math.floor(Math.random() * 40) + 20,
+      fileType: fileTypeMap[deployData.stack] || deployData.stack + " File",
+      botType: botTypeMap[deployData.stack] || deployData.stack,
+      errorCount: 0,
+      deployedAt: new Date().toISOString(),
+      fileSize: (Math.random() * 10 + 1).toFixed(1) + " MB",
       createdAt: new Date().toISOString()
     };
     setWebsites([...websites, newSite]);
@@ -314,26 +321,26 @@ export default function DashboardPage() {
                   ))}
                 </div>
 
-                <div className="mt-6 grid md:grid-cols-2 gap-6">
-                  <div>
-                    <div className="rounded-2xl bg-black border border-[#222] p-6 text-center">
-                      <p className="text-xs text-[#888]">Scan QR to Pay</p>
-                      <div className="mt-4 flex justify-center bg-white p-4 rounded-xl inline-flex">
-                        <QRCodeSVG value={currentWallet.address} size={160} />
-                      </div>
-                      <p className="mt-4 text-xs text-[#888]">Amount: <span className="text-white font-bold text-sm">{selectedPlan.price} {payCoin}</span></p>
-                      <p className="text-[10px] text-[#666] mt-1">Network: {currentWallet.network}</p>
-                    </div>
-                  </div>
-
+                <div className="mt-6">
                   <div className="space-y-4">
-                    <div>
+                    <div className="rounded-2xl bg-black border border-[#6C5CE7]/30 p-4">
                       <label className="text-xs text-[#888]">Payment Address ({payCoin} BEP-20)</label>
-                      <div className="mt-1 flex gap-2">
-                        <input value={currentWallet.address} readOnly className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-xs font-mono" />
-                        <button onClick={() => { navigator.clipboard.writeText(currentWallet.address); toast("Copied!", "success"); }} className="px-4 py-2 rounded-xl bg-white text-black text-xs font-medium">Copy</button>
+                      <div className="mt-2 flex gap-2">
+                        <input value={currentWallet.address} readOnly className="flex-1 px-3 py-3 rounded-xl bg-[#111] border border-[#222] text-xs font-mono" />
+                        <button onClick={() => { navigator.clipboard.writeText(currentWallet.address); toast("Copied!", "success"); }} className="px-5 py-2 rounded-xl bg-white text-black text-xs font-medium">Copy</button>
                       </div>
-                      <p className="text-[11px] text-red-400 mt-2 bg-red-500/10 border border-red-500/20 rounded-lg p-2">⚠️ Only send on BEP-20 (BNB Smart Chain). Other networks will be lost forever!</p>
+                      <div className="mt-3 p-3 rounded-xl bg-[#111] border border-[#222] flex justify-between items-center">
+                        <div>
+                          <p className="text-xs text-[#888]">Amount to Pay</p>
+                          <p className="text-white font-bold">{selectedPlan.price} {payCoin}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-[#888]">Network</p>
+                          <p className="text-xs text-[#00D4FF]">{currentWallet.network}</p>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-red-400 mt-3 bg-red-500/10 border border-red-500/20 rounded-lg p-2">⚠️ Only send on BEP-20 (BNB Smart Chain). Other networks will be lost forever!</p>
+                      <p className="text-xs text-[#666] mt-2 text-center">Contact only on Telegram: <a href="https://t.me/Rolax112" target="_blank" className="text-[#00D4FF]">t.me/Rolax112</a></p>
                     </div>
 
                     <div>

@@ -87,10 +87,6 @@ export default function LoginPage() {
           <h1 className="font-grotesk text-2xl font-bold">Welcome back</h1>
           <p className="text-sm text-[#888] mt-1">Sign in to your hosting dashboard</p>
 
-          <div className="mt-4 p-3 rounded-xl bg-[#6C5CE7]/10 border border-[#6C5CE7]/20 text-xs text-[#a89bff]">
-            <strong>Admin Demo:</strong> {ADMIN_EMAIL} / {ADMIN_PASSWORD}
-          </div>
-
           <form onSubmit={handleLogin} className="mt-6 space-y-4">
             <div>
               <label className="text-xs text-[#888]">Email</label>

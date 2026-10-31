@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useStore, ADMIN_EMAIL } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
-import { QRCodeSVG } from "qrcode.react";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -302,8 +301,9 @@ export default function AdminPage() {
                   </div>
                   <div><label className="text-xs text-[#888]">Address</label><input value={w.address} onChange={e => { const arr = [...wallets]; arr[idx].address = e.target.value; setWallets(arr); }} className="w-full mt-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-mono text-xs" /></div>
                   <div><label className="text-xs text-[#888]">Network</label><input value={w.network} onChange={e => { const arr = [...wallets]; arr[idx].network = e.target.value; setWallets(arr); }} className="w-full mt-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" /></div>
-                  <div className="flex justify-center bg-white p-3 rounded-xl">
-                    <QRCodeSVG value={w.address} size={100} />
+                  <div className="p-3 rounded-xl bg-black border border-[#222] flex justify-between items-center">
+                    <span className="text-xs text-[#888]">Address (Only BEP-20)</span>
+                    <button onClick={() => { navigator.clipboard.writeText(w.address); toast("Copied: " + w.address, "success"); }} className="px-3 py-1 rounded-full bg-white text-black text-xs">Copy Address</button>
                   </div>
                 </div>
               ))}
@@ -385,29 +385,98 @@ export default function AdminPage() {
 
           {tab === "websites" && (
             <div className="space-y-4">
-              <h2 className="font-grotesk text-xl font-bold">Website Manager (All Users)</h2>
+              <div className="flex items-center justify-between">
+                <h2 className="font-grotesk text-xl font-bold">Website Manager (All Users)</h2>
+                <span className="text-xs px-3 py-1 rounded-full bg-[#111] border border-[#222] text-[#888]">{websites.length} hosted files</span>
+              </div>
+              
+              {/* Deployed Status Overview */}
+              <div className="grid md:grid-cols-3 gap-3">
+                <div className="rounded-xl bg-[#00ff88]/5 border border-[#00ff88]/20 p-3">
+                  <p className="text-xs text-[#888]">Deployed Successfully</p>
+                  <p className="text-lg font-bold text-[#00ff88]">{websites.filter(w => w.status === "Running").length}</p>
+                </div>
+                <div className="rounded-xl bg-yellow-500/5 border border-yellow-500/20 p-3">
+                  <p className="text-xs text-[#888]">With Errors (Auto-fixing)</p>
+                  <p className="text-lg font-bold text-yellow-400">{websites.filter(w => w.status === "Error").length}</p>
+                </div>
+                <div className="rounded-xl bg-[#111] border border-[#222] p-3">
+                  <p className="text-xs text-[#888]">Total Hosted</p>
+                  <p className="text-lg font-bold">{websites.length} files</p>
+                </div>
+              </div>
+
               <div className="rounded-2xl bg-[#111] border border-[#222] overflow-hidden overflow-x-auto">
-                <table className="w-full text-sm min-w-[800px]">
+                <table className="w-full text-sm min-w-[900px]">
                   <thead className="bg-black border-b border-[#222] text-[#888] text-xs">
-                    <tr><th className="text-left px-4 py-3">Name</th><th className="text-left px-4 py-3">URL</th><th className="text-left px-4 py-3">User</th><th className="text-left px-4 py-3">Stack</th><th className="text-left px-4 py-3">Status</th><th className="text-left px-4 py-3">Actions</th></tr>
+                    <tr><th className="text-left px-3 py-3">Name</th><th className="text-left px-3 py-3">URL</th><th className="text-left px-3 py-3">User</th><th className="text-left px-3 py-3">Type</th><th className="text-left px-3 py-3">File Info</th><th className="text-left px-3 py-3">Status</th><th className="text-left px-3 py-3">Actions</th></tr>
                   </thead>
                   <tbody>
                     {websites.map(w => (
-                      <tr key={w.id} className="border-b border-[#222]/30">
-                        <td className="px-4 py-3 font-medium">{w.name}</td>
-                        <td className="px-4 py-3 text-[#00D4FF] text-xs">{w.url}</td>
-                        <td className="px-4 py-3 text-xs text-[#888]">{users.find(u => u.id === w.userId)?.email || w.userId}</td>
-                        <td className="px-4 py-3"><span className="px-2 py-1 rounded-full bg-black border border-[#222] text-xs">{w.stack}</span></td>
-                        <td className="px-4 py-3"><span className={`px-2 py-1 rounded-full text-xs ${w.status === "Running" ? "bg-[#00ff88]/10 text-[#00ff88]" : "bg-red-500/10 text-red-400"}`}>{w.status}</span></td>
-                        <td className="px-4 py-3 flex gap-1">
-                          <button onClick={() => { setWebsites(websites.map(x => x.id === w.id ? { ...x, status: x.status === "Running" ? "Stopped" as const : "Running" as const } : x)); toast("Status toggled", "success"); }} className="px-2 py-1 rounded-full bg-[#222] text-xs">{w.status === "Running" ? "Stop" : "Start"}</button>
-                          <button onClick={() => { if (confirm("Delete site?")) { setWebsites(websites.filter(x => x.id !== w.id)); toast("Deleted", "info"); } }} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-xs">Delete</button>
+                      <tr key={w.id} className="border-b border-[#222]/30 hover:bg-black/30">
+                        <td className="px-3 py-3">
+                          <p className="font-medium text-sm">{w.name}</p>
+                          <p className="text-[10px] text-[#666]">{w.fileSize || "—"} • {w.deployedAt ? new Date(w.deployedAt).toLocaleDateString() : new Date(w.createdAt).toLocaleDateString()}</p>
+                        </td>
+                        <td className="px-3 py-3 text-[#00D4FF] text-xs">{w.url}</td>
+                        <td className="px-3 py-3 text-xs text-[#888]">{users.find(u => u.id === w.userId)?.email || w.userId.slice(0,8)}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex flex-col gap-1">
+                            <span className="px-2 py-1 rounded-full bg-black border border-[#222] text-xs text-center">{w.stack}</span>
+                            <span className="text-[10px] text-[#888] text-center">{(w as any).botType || (w as any).fileType || "—"}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="text-xs">
+                            <p className="text-white">{(w as any).fileType || w.stack + " File"}</p>
+                            <p className="text-[10px] text-[#666]">Deployed: {(w as any).errorCount || 0} errors</p>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex flex-col gap-1">
+                            <span className={`px-2 py-1 rounded-full text-xs text-center ${w.status === "Running" ? "bg-[#00ff88]/10 text-[#00ff88] border border-[#00ff88]/20" : w.status === "Error" ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20" : "bg-red-500/10 text-red-400"}`}>{w.status === "Running" ? "● Deployed" : w.status === "Error" ? "⚠ Error" : "● " + w.status}</span>
+                            {w.status === "Error" && (w as any).lastError && <span className="text-[10px] text-red-400 max-w-[150px] truncate" title={(w as any).lastError}>{(w as any).lastError}</span>}
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex gap-1 flex-wrap">
+                            <button onClick={() => {
+                              // Auto-fix logic: if errorCount < 5, fix it, else delete
+                              if (w.status === "Error") {
+                                const errCount = (w as any).errorCount || 0;
+                                if (errCount >= 5) {
+                                  if (confirm(`Too many errors (${errCount}) - Delete this hosted file?`)) {
+                                    setWebsites(websites.filter(x => x.id !== w.id));
+                                    toast("Deleted due to excessive errors", "info");
+                                  }
+                                } else {
+                                  setWebsites(websites.map(x => x.id === w.id ? { ...x, status: "Running" as const, errorCount: 0, lastError: undefined } : x));
+                                  toast("Auto-fixed errors! File redeployed.", "success");
+                                }
+                              } else {
+                                setWebsites(websites.map(x => x.id === w.id ? { ...x, status: x.status === "Running" ? "Stopped" as const : "Running" as const } : x));
+                                toast("Status toggled", "success");
+                              }
+                            }} className="px-2 py-1 rounded-full bg-[#222] text-xs">{w.status === "Error" ? "Fix" : w.status === "Running" ? "Stop" : "Start"}</button>
+                            <button onClick={() => {
+                              // Download hosted file simulation
+                              const blob = new Blob([`// Hosted file: ${w.name}\n// Stack: ${w.stack}\n// Type: ${(w as any).botType || (w as any).fileType}\n// Downloaded from ROLAX HOST\nconsole.log("Hello from ${w.name}");`], {type: "text/plain"});
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement("a");
+                              a.href = url;
+                              a.download = `${w.name}.zip`;
+                              a.click();
+                              toast("Downloaded: " + w.name + ".zip", "success");
+                            }} className="px-2 py-1 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20 text-xs">Download</button>
+                            <button onClick={() => { if (confirm("Delete hosted file?")) { setWebsites(websites.filter(x => x.id !== w.id)); toast("Deleted", "info"); } }} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-xs">Delete</button>
+                          </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              <p className="text-xs text-[#666]">💡 Auto-fix: Errors &lt; 5 → auto fix on click, Errors ≥5 → auto delete. Admin can download any hosted file.</p>
             </div>
           )}
 

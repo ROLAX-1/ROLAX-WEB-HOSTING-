@@ -46,9 +46,15 @@ export type Website = {
   name: string;
   url: string;
   stack: string;
-  status: "Running" | "Stopped";
+  status: "Running" | "Stopped" | "Error";
   cpu: number;
   ram: number;
+  fileType?: string;
+  botType?: string;
+  errorCount?: number;
+  lastError?: string;
+  deployedAt?: string;
+  fileSize?: string;
   createdAt: string;
 };
 
@@ -90,6 +96,8 @@ export type SiteSettings = {
   faq: { q: string; a: string }[];
   footerTelegram: string;
   footerText: string;
+  contactTelegram: string;
+  contactNote: string;
 };
 
 const defaultPlans: Plan[] = [
@@ -162,6 +170,8 @@ const defaultSettings: SiteSettings = {
   ],
   footerTelegram: "@rolaxexploitsz",
   footerText: "© 2025 ROLAX HOST. Premium hosting for modern developers.",
+  contactTelegram: "https://t.me/Rolax112",
+  contactNote: "Contact only on Telegram - No other support",
 };
 
 // Helper to load from localStorage
@@ -235,8 +245,9 @@ export const useStore = create<Store>((set, get) => ({
 
     if (websites.length === 0) {
       seededWebsites = [
-        { id: "ws1", userId: "demo1", name: "my-portfolio", url: "my-portfolio.rolax.host", stack: "HTML", status: "Running", cpu: 34, ram: 42, createdAt: new Date().toISOString() },
-        { id: "ws2", userId: "demo1", name: "api-backend", url: "api-backend.rolax.host", stack: "Node.js", status: "Running", cpu: 67, ram: 58, createdAt: new Date().toISOString() },
+        { id: "ws1", userId: "demo1", name: "my-portfolio", url: "my-portfolio.rolax.host", stack: "HTML", status: "Running", cpu: 34, ram: 42, fileType: "HTML Website", botType: "Static Site", errorCount: 0, deployedAt: new Date().toISOString(), fileSize: "2.4 MB", createdAt: new Date().toISOString() },
+        { id: "ws2", userId: "demo1", name: "api-backend", url: "api-backend.rolax.host", stack: "Node.js", status: "Running", cpu: 67, ram: 58, fileType: "Node.js Bot", botType: "Discord Bot", errorCount: 0, deployedAt: new Date().toISOString(), fileSize: "15.2 MB", createdAt: new Date().toISOString() },
+        { id: "ws3", userId: "demo1", name: "telegram-bot", url: "telegram-bot.rolax.host", stack: "Python", status: "Error", cpu: 12, ram: 18, fileType: "Python Bot", botType: "Telegram Bot", errorCount: 3, lastError: "ModuleNotFoundError: No module named 'telebot'", deployedAt: new Date().toISOString(), fileSize: "8.1 MB", createdAt: new Date().toISOString() },
       ];
     }
     if (payments.length === 0) {
