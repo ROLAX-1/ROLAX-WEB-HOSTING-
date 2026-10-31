@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  isAdmin   Boolean  @default(false)
+  planId    String?
+  planExpiry DateTime?
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  websites  Website[]
+  payments  Payment[]
+  tickets   Ticket[]
+}
+
+model Website {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  url       String
+  stack     String
+  status    String   @default("Running")
+  cpu       Int      @default(0)
+  ram       Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model Plan {
+  id        String   @id @default(cuid())
+  name      String
+  price     Float
+  ram       String
+  cpu       String
+  storage   String
+  bandwidth String
+  features  String[]
+  popular   Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Stack {
+  id          String @id @default(cuid())
+  name        String
+  icon        String
+  color       String
+  description String
+}
+
+model CryptoWallet {
+  id      String @id @default(cuid())
+  name    String
+  symbol  String
+  address String
+  network String
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  userEmail String
+  planId    String
+  planName  String
+  amount    Float
+  coin      String
+  txid      String
+  screenshot String?
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+}
+
+model Ticket {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  userEmail String
+  subject   String
+  message   String
+  status    String   @default("open")
+  replies   Json     @default("[]")
+  createdAt DateTime @default(now())
+}
+
+model SiteSettings {
+  id              String @id @default(cuid())
+  logoText        String
+  heroTitle       String
+  heroSubtitle    String
+  heroBadge       String
+  ctaText         String
+  features        Json
+  whyUsTitle      String
+  whyUsDesc       String
+  whyUsPoints     String[]
+  faq             Json
+  footerTelegram  String
+  footerText      String
+}
