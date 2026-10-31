@@ -24,7 +24,7 @@ export default function Navbar() {
     <nav className={`fixed top-0 left-0 right-0 z-50 transition-all ${scrolled ? "bg-black/80 backdrop-blur-xl border-b border-[#222]" : "bg-transparent border-b border-transparent"}`}>
       <div className="max-w-7xl mx-auto px-4 md:px-6 h-[64px] flex items-center justify-between">
         <Link href="/" className="flex items-center gap-3">
-          <img src="/images/rolax-logo-new.jpg" alt="ROLAX HOST" className="w-10 h-10 rounded-xl object-cover border border-[#222] bg-black" />
+          <img src="/images/rolax-hero-new.jpg" alt="ROLAX HOST" className="w-10 h-10 rounded-full object-cover border border-[#222] bg-black shadow-glow" />
           <span className="font-grotesk font-bold text-[18px] tracking-tight">{settings.logoText}</span>
           <span className="hidden md:inline text-[10px] bg-[#111] border border-[#222] px-2 py-1 rounded-full text-[#888] ml-2">BETA</span>
         </Link>
