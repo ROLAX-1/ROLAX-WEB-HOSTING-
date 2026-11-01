@@ -1,11 +1,12 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { setAuth } from "@/lib/auth";
 import { useStore } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
+import { signInWithGoogle, type GoogleProfile } from "@/lib/google";
 
 export default function RegisterPage() {
   const [name, setName] = useState("");
@@ -14,9 +15,34 @@ export default function RegisterPage() {
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const [googleLoading, setGoogleLoading] = useState(false);
   const hydrate = useStore((s) => s.hydrate);
 
   useEffect(() => { hydrate(); }, [hydrate]);
+
+  const finishGoogle = useCallback((profile: GoogleProfile) => {
+    try {
+      const users = JSON.parse(localStorage.getItem("rolax_users") || "[]");
+      if (!users.find((u: any) => u.email === profile.email)) {
+        users.push({ id: (profile.sub || "g_" + Date.now()).slice(0, 40), name: profile.name, email: profile.email, status: "active", createdAt: new Date().toISOString() });
+        localStorage.setItem("rolax_users", JSON.stringify(users));
+      }
+      localStorage.setItem("rolax_google_profile", JSON.stringify(profile));
+      localStorage.setItem("rolax_login_method", "google");
+    } catch {}
+    setAuth({ id: (profile.sub || "g_" + Date.now()).slice(0, 40), name: profile.name, email: profile.email, isAdmin: false });
+    toast(`Account ready: ${profile.email}`, "success");
+    router.push("/dashboard");
+  }, [router]);
+
+  const handleGoogle = () => {
+    setGoogleLoading(true);
+    signInWithGoogle(
+      (profile) => { setGoogleLoading(false); finishGoogle(profile); },
+      (msg) => { setGoogleLoading(false); toast(msg, "error"); }
+    );
+    setTimeout(() => setGoogleLoading(false), 20000);
+  };
 
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,6 +120,27 @@ export default function RegisterPage() {
               {loading ? "Creating..." : "Create account →"}
             </button>
           </form>
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="h-px flex-1 bg-[#222]" />
+            <span className="text-[11px] text-[#666] uppercase tracking-wider">or</span>
+            <div className="h-px flex-1 bg-[#222]" />
+          </div>
+
+          <button
+            type="button"
+            onClick={handleGoogle}
+            disabled={googleLoading}
+            className="w-full py-3 rounded-full bg-white text-black font-medium text-sm flex items-center justify-center gap-3 hover:bg-zinc-100 transition disabled:opacity-60"
+          >
+            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden>
+              <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.3l7.8 6.1C12.2 13.3 17.6 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.1 24.5c0-1.6-.15-3.1-.43-4.5H24v9h12.4c-.54 2.9-2.2 5.4-4.7 7l7.6 5.9c4.4-4.1 6.8-10.1 6.8-17.4z"/>
+              <path fill="#FBBC05" d="M10.3 28.6c-.5-1.5-.8-3-.8-4.6s.3-3.1.8-4.6l-7.8-6.1C.9 16.3 0 20 0 24s.9 7.7 2.5 10.7l7.8-6.1z"/>
+              <path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.3-5.6l-7.6-5.9c-2.1 1.4-4.8 2.3-7.7 2.3-6.4 0-11.8-3.8-13.7-9.2l-7.8 6.1C6.4 42.6 14.6 48 24 48z"/>
+            </svg>
+            {googleLoading ? "Connecting to Google..." : "Sign up with Google"}
+          </button>
 
           <p className="text-center text-sm text-[#888] mt-6">
             Already have an account? <Link href="/login" className="text-white hover:underline">Sign in</Link>

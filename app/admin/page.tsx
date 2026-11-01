@@ -7,6 +7,7 @@ import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { analyzeSite, autoFixSite, needsManualAction, MAX_ERRORS } from "@/lib/hosting";
+import { getGoogleClientId, setGoogleClientId } from "@/lib/google";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -14,8 +15,10 @@ export default function AdminPage() {
   const [auth, setAuth] = useState<any>(null);
   const [tab, setTab] = useState("overview");
   const [search, setSearch] = useState("");
+  const [gClientId, setGClientId] = useState("");
 
   useEffect(() => { hydrate(); }, [hydrate]);
+  useEffect(() => { setGClientId(getGoogleClientId()); }, []);
   useEffect(() => {
     const a = getAuth();
     if (!a || a.email !== ADMIN_EMAIL) { router.push("/login"); return; }
@@ -309,6 +312,16 @@ export default function AdminPage() {
                   <input value={(settings as any)[field.key]} onChange={e => setSettings({ ...settings, [field.key]: e.target.value })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm" />
                 </div>
               ))}
+
+              <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
+                <label className="text-xs text-[#888]">Google Sign-In Client ID (optional)</label>
+                <input value={gClientId} onChange={e => setGClientId(e.target.value)} placeholder="xxxxx.apps.googleusercontent.com" className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm font-mono text-xs" />
+                <div className="flex items-center gap-2 mt-2">
+                  <button onClick={() => { setGoogleClientId(gClientId); toast("Google Client ID saved", "success"); }} className="px-4 py-2 rounded-full bg-white text-black text-xs">Save</button>
+                  <span className="text-[11px] text-[#666]">Khali chhodne par Google account chooser fallback chalega</span>
+                </div>
+                <p className="text-[11px] text-[#666] mt-2">Google Cloud Console → APIs &amp; Services → Credentials → OAuth client (Web) → Authorized origin: {typeof window !== "undefined" ? window.location.origin : "https://your-domain"}</p>
+              </div>
 
               <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
                 <label className="text-xs text-[#888]">USD → INR Rate (pricing me ₹ dikhane ke liye)</label>

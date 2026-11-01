@@ -23,9 +23,16 @@ export default function DashboardPage() {
   const [fileManagerSite, setFileManagerSite] = useState<any>(null);
   const [errorSite, setErrorSite] = useState<any>(null);
   const [alertSite, setAlertSite] = useState<any>(null);
+  const [gProfile, setGProfile] = useState<any>(null);
   const [logsSite, setLogsSite] = useState<any>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("rolax_google_profile");
+      if (raw) setGProfile(JSON.parse(raw));
+    } catch {}
+  }, []);
   useEffect(() => {
     const a = getAuth();
     if (!a) { router.push("/login"); return; }
@@ -160,7 +167,10 @@ export default function DashboardPage() {
             </nav>
           </div>
           <div className="flex items-center gap-3">
-            <span className="hidden md:inline text-xs text-[#888]">{auth.email}</span>
+            {gProfile?.picture && (
+              <img src={gProfile.picture} alt="Google" className="w-7 h-7 rounded-full border border-[#333]" referrerPolicy="no-referrer" />
+            )}
+            <span className="hidden md:inline text-xs text-[#888]">{auth.email}{gProfile ? " • Google" : ""}</span>
             <span className={`px-3 py-1 rounded-full text-xs font-medium border ${myPlan ? "bg-[#00ff88]/10 text-[#00ff88] border-[#00ff88]/20" : "bg-[#888]/10 text-[#888] border-[#222]"}`}>{myPlan?.name || "Free Plan"}</span>
             <button onClick={() => { clearAuth(); router.push("/"); }} className="px-4 py-2 rounded-full bg-[#111] border border-[#222] text-sm hover:border-[#333]">Logout</button>
           </div>
