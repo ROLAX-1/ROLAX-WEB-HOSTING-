@@ -4,7 +4,10 @@ import { create } from "zustand";
 export type Plan = {
   id: string;
   name: string;
-  price: number;
+  price: number;            // poore duration ka price (total)
+  durationValue?: number;   // jaise 3
+  durationUnit?: DurationUnit; // "days" | "months" | "years"
+  pricePerMonth?: boolean;  // price ko per-month treat karna hai (total = price x months)
   ram: string;
   cpu: string;
   storage: string;
@@ -21,6 +24,41 @@ export type Stack = {
   color: string;
   description: string;
 };
+
+export type DurationUnit = "days" | "months" | "years";
+
+export const DURATION_PRESETS: { label: string; value: number; unit: DurationUnit; short: string }[] = [
+  { label: "15 Days", value: 15, unit: "days", short: "15 days" },
+  { label: "1 Month", value: 1, unit: "months", short: "1 month" },
+  { label: "3 Months", value: 3, unit: "months", short: "3 months" },
+  { label: "6 Months", value: 6, unit: "months", short: "6 months" },
+  { label: "1 Year", value: 1, unit: "years", short: "1 year" },
+  { label: "2 Years", value: 2, unit: "years", short: "2 years" },
+];
+
+/** Duration ko dinon me badlo (approval par expiry set karne ke liye) */
+export function durationInDays(value?: number, unit?: DurationUnit): number {
+  const v = value && value > 0 ? value : 1;
+  if (unit === "days") return v;
+  if (unit === "years") return v * 365;
+  return v * 30;
+}
+
+/** "3 months" jaisa readable label */
+export function durationLabel(value?: number, unit?: DurationUnit): string {
+  const v = value && value > 0 ? value : 1;
+  const u = unit || "months";
+  const name = u === "days" ? "day" : u === "years" ? "year" : "month";
+  return `${v} ${name}${v > 1 ? "s" : ""}`;
+}
+
+/** Plan ka total price (per-month toggle ke hisaab se) */
+export function planTotal(plan: Plan): number {
+  const price = Number(plan.price) || 0;
+  if (!plan.pricePerMonth) return price;
+  const months = durationInDays(plan.durationValue, plan.durationUnit) / 30;
+  return Math.round(price * months * 100) / 100;
+}
 
 export type CryptoWallet = {
   id: string;
@@ -67,6 +105,8 @@ export type Payment = {
   planName: string;
   amount: number;
   coin: string;
+  durationLabel?: string;
+  durationDays?: number;
   txid: string;
   screenshot?: string;
   status: "pending" | "approved" | "rejected";
@@ -112,6 +152,8 @@ const defaultPlans: Plan[] = [
     storage: "2 GB",
     bandwidth: "10 GB",
     features: ["1 Website", "512 MB RAM", "Community Support", "Free SSL"],
+    durationValue: 1,
+    durationUnit: "months",
   },
   {
     id: "plan_pro",
@@ -123,6 +165,8 @@ const defaultPlans: Plan[] = [
     bandwidth: "100 GB",
     features: ["10 Websites", "2 GB RAM", "Priority Support", "Free SSL", "Daily Backups", "Custom Domain"],
     popular: true,
+    durationValue: 1,
+    durationUnit: "months",
   },
   {
     id: "plan_enterprise",
@@ -133,6 +177,8 @@ const defaultPlans: Plan[] = [
     storage: "100 GB",
     bandwidth: "Unlimited",
     features: ["Unlimited Websites", "8 GB RAM", "24/7 Support", "Free SSL", "Hourly Backups", "DDoS Protection", "Dedicated IP"],
+    durationValue: 1,
+    durationUnit: "months",
   },
 ];
 
@@ -216,6 +262,9 @@ function sanitizePlans(input: any): Plan[] {
         features: features.length ? features : ["Basic Support"],
         popular: !!p.popular,
         color: p.color ? String(p.color) : undefined,
+        durationValue: p.durationValue ? Math.max(1, Math.floor(num(p.durationValue))) : 1,
+        durationUnit: p.durationUnit === "days" || p.durationUnit === "years" || p.durationUnit === "months" ? p.durationUnit : "months",
+        pricePerMonth: !!p.pricePerMonth,
       } as Plan;
     });
   return clean.length ? clean : defaultPlans;

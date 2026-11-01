@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
-import { useStore, ADMIN_EMAIL } from "@/lib/store";
+import { useStore, ADMIN_EMAIL, durationLabel, durationInDays, planTotal } from "@/lib/store";
 import { analyzeSite, autoFixSite, needsManualAction, runDeployChecks, detectFromFileName, MAX_ERRORS } from "@/lib/hosting";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
@@ -114,7 +114,9 @@ export default function DashboardPage() {
       userEmail: auth.email,
       planId: selectedPlan.id,
       planName: selectedPlan.name,
-      amount: selectedPlan.price,
+      amount: planTotal(selectedPlan),
+      durationLabel: durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit),
+      durationDays: durationInDays(selectedPlan.durationValue, selectedPlan.durationUnit),
       coin: payCoin,
       txid,
       screenshot,
@@ -224,8 +226,8 @@ export default function DashboardPage() {
                 {plans.map(plan => (
                   <div key={plan.id} className={`rounded-2xl p-5 border flex flex-col ${plan.popular ? "bg-black border-[#6C5CE7]/40" : "bg-black border-[#222]"}`}>
                     <h4 className="font-semibold">{plan.name}</h4>
-                    <p className="text-xl font-bold mt-1">{plan.price === 0 ? "Free" : `$${plan.price}`}<span className="text-xs text-[#888] font-normal">{plan.price === 0 ? "" : " /mo"}</span></p>
-                    {plan.price > 0 && <p className="text-[11px] text-[#00D4FF]">≈ ₹{inr(plan.price)} / month</p>}
+                    <p className="text-xl font-bold mt-1">{plan.price === 0 ? "Free" : `$${planTotal(plan).toFixed(2)}`}<span className="text-xs text-[#888] font-normal">{plan.price === 0 ? "" : " /" + durationLabel(plan.durationValue, plan.durationUnit)}</span></p>
+                    {plan.price > 0 && <p className="text-[11px] text-[#00D4FF]">≈ ₹{inr(planTotal(plan))} • {durationLabel(plan.durationValue, plan.durationUnit)}</p>}
                     <ul className="mt-3 space-y-1 text-xs text-[#888]">
                       <li>{plan.ram} RAM • {plan.cpu}</li>
                       <li>{plan.storage} Storage</li>
@@ -359,9 +361,9 @@ export default function DashboardPage() {
                   {plans.map(plan => (
                     <div key={plan.id} className={`rounded-2xl p-5 border ${plan.price === 0 ? "bg-[#111] border-[#222] opacity-75" : "bg-[#111] border-[#222]"}`}>
                       <h4 className="font-semibold">{plan.name}</h4>
-                      <p className="text-xl font-bold">{plan.price === 0 ? "Free" : `$${plan.price}`} <span className="text-xs text-[#666]">{plan.price === 0 ? "" : "/mo"}</span></p>
-                      {plan.price > 0 && <p className="text-[11px] text-[#00D4FF]">≈ ₹{inr(plan.price)} / month</p>}
-                      <p className="text-xs text-[#666] mt-1">{plan.price === 0 ? "Free Forever" : "BEP-20 Crypto Only"}</p>
+                      <p className="text-xl font-bold">{plan.price === 0 ? "Free" : `$${planTotal(plan).toFixed(2)}`} <span className="text-xs text-[#666]">{plan.price === 0 ? "" : "/ " + durationLabel(plan.durationValue, plan.durationUnit)}</span></p>
+                      {plan.price > 0 && <p className="text-[11px] text-[#00D4FF]">≈ ₹{inr(planTotal(plan))} • {durationLabel(plan.durationValue, plan.durationUnit)}</p>}
+                      <p className="text-xs text-[#666] mt-1">{plan.price === 0 ? "Free Forever" : `Valid for ${durationLabel(plan.durationValue, plan.durationUnit)} • BEP-20`}</p>
                       <button onClick={() => { if (plan.price === 0) { toast("Starter is free! No payment needed.", "info"); return; } setSelectedPlan(plan); }} className={`mt-3 w-full py-2 rounded-full text-sm font-medium ${plan.price === 0 ? "bg-[#222] text-[#666] border border-[#333]" : "bg-white text-black"}`}>{plan.price === 0 ? "Free - Active" : "Select Plan"}</button>
                     </div>
                   ))}
@@ -372,7 +374,7 @@ export default function DashboardPage() {
                     <div className="mt-3 space-y-2">
                       {myPayments.map(p => (
                         <div key={p.id} className="flex items-center justify-between p-3 rounded-xl bg-black border border-[#222] text-sm">
-                          <span>{p.planName} - {p.amount} USDT ({p.coin})</span>
+                          <span>{p.planName} - {p.amount} {p.coin} {p.durationLabel ? `• ${p.durationLabel}` : ""}</span>
                           <span className={`px-2 py-1 rounded-full text-xs ${p.status === "pending" ? "bg-yellow-500/10 text-yellow-400" : p.status === "approved" ? "bg-[#00ff88]/10 text-[#00ff88]" : "bg-red-500/10 text-red-400"}`}>{p.status}</span>
                         </div>
                       ))}
@@ -392,7 +394,7 @@ export default function DashboardPage() {
                 ) : (
                 <>
                 <h3 className="font-grotesk text-xl font-bold">Pay with Crypto (BEP-20 Only)</h3>
-                <p className="text-sm text-[#888] mt-1">Plan: <span className="text-white font-medium">{selectedPlan.name} - ${selectedPlan.price} (≈ ₹{inr(selectedPlan.price)})</span></p>
+                <p className="text-sm text-[#888] mt-1">Plan: <span className="text-white font-medium">{selectedPlan.name} - ${planTotal(selectedPlan).toFixed(2)} (≈ ₹{inr(planTotal(selectedPlan))})</span> for <span className="text-white font-medium">{durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit)}</span></p>
 
                 <div className="mt-6 flex gap-3 flex-wrap">
                   {wallets.filter(w => ["BNB","USDT"].includes(w.symbol)).map(w => (
@@ -413,7 +415,8 @@ export default function DashboardPage() {
                       <div className="mt-3 p-3 rounded-xl bg-[#111] border border-[#222] flex justify-between items-center">
                         <div>
                           <p className="text-xs text-[#888]">Amount to Pay</p>
-                          <p className="text-white font-bold">{selectedPlan.price} {payCoin}</p>
+                          <p className="text-white font-bold">{planTotal(selectedPlan)} {payCoin}</p>
+                          <p className="text-[10px] text-[#888]">Duration: {durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit)}</p>
                         </div>
                         <div className="text-right">
                           <p className="text-xs text-[#888]">Network</p>

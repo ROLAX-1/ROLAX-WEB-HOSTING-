@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
-import { useStore, ADMIN_EMAIL } from "@/lib/store";
+import { useStore, ADMIN_EMAIL, DURATION_PRESETS, durationInDays, durationLabel, planTotal, type DurationUnit } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
@@ -30,9 +30,9 @@ export default function AdminPage() {
   const revenue = payments.filter(p => p.status === "approved").reduce((sum, p) => sum + p.amount, 0);
 
   const defaultPlansReset = () => ([
-    { id: "plan_free", name: "Starter", price: 0, ram: "512 MB", cpu: "0.5 vCPU", storage: "2 GB", bandwidth: "10 GB", features: ["1 Website", "512 MB RAM", "Community Support", "Free SSL"] },
-    { id: "plan_pro", name: "Pro Hosting", price: 4.99, ram: "2 GB", cpu: "2 vCPU", storage: "20 GB", bandwidth: "100 GB", features: ["10 Websites", "2 GB RAM", "Priority Support", "Free SSL", "Daily Backups", "Custom Domain"], popular: true },
-    { id: "plan_enterprise", name: "Enterprise", price: 14.99, ram: "8 GB", cpu: "4 vCPU", storage: "100 GB", bandwidth: "Unlimited", features: ["Unlimited Websites", "8 GB RAM", "24/7 Support", "Free SSL", "Hourly Backups", "DDoS Protection", "Dedicated IP"] },
+    { id: "plan_free", name: "Starter", price: 0, ram: "512 MB", cpu: "0.5 vCPU", storage: "2 GB", bandwidth: "10 GB", features: ["1 Website", "512 MB RAM", "Community Support", "Free SSL"], durationValue: 1, durationUnit: "months" },
+    { id: "plan_pro", name: "Pro Hosting", price: 4.99, ram: "2 GB", cpu: "2 vCPU", storage: "20 GB", bandwidth: "100 GB", features: ["10 Websites", "2 GB RAM", "Priority Support", "Free SSL", "Daily Backups", "Custom Domain"], popular: true, durationValue: 1, durationUnit: "months" },
+    { id: "plan_enterprise", name: "Enterprise", price: 14.99, ram: "8 GB", cpu: "4 vCPU", storage: "100 GB", bandwidth: "Unlimited", features: ["Unlimited Websites", "8 GB RAM", "24/7 Support", "Free SSL", "Hourly Backups", "DDoS Protection", "Dedicated IP"], durationValue: 1, durationUnit: "months" },
   ] as any[]);
 
   // ---- Hosting error center ----
@@ -375,7 +375,8 @@ export default function AdminPage() {
                   <p className="text-xs text-[#888] mt-1">Price, RAM, CPU — sab kuch apne hisaab se edit karo. Plan delete bhi kar sakte ho.</p>
                 </div>
                 <button onClick={() => {
-                  const newPlan = { id: "plan_" + Date.now(), name: "New Plan", price: 9.99, ram: "4 GB", cpu: "2 vCPU", storage: "50 GB", bandwidth: "200 GB", features: ["Feature 1", "Feature 2"] };
+                  const newPlan = { id: "plan_" + Date.now(), name: "New Plan", price: 9.99, ram: "4 GB", cpu: "2 vCPU", storage: "50 GB", bandwidth: "200 GB", features: ["Feature 1", "Feature 2"], durationValue: 1, durationUnit: "months" as DurationUnit };
+                  
                   setPlans([...plans, newPlan]);
                   toast("Plan added", "success");
                 }} className="px-4 py-2 rounded-full bg-white text-black text-sm font-medium">+ Add Plan</button>
@@ -434,6 +435,62 @@ export default function AdminPage() {
                         <label className="text-[10px] text-[#888]">Bandwidth</label>
                         <input value={plan.bandwidth} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], bandwidth: e.target.value }; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
                       </div>
+                    </div>
+
+                    {/* ---- Duration / Billing Period ---- */}
+                    <div className="rounded-xl bg-black border border-[#6C5CE7]/30 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] text-[#a89bff] font-semibold">Duration (kitne time ke liye)</label>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#6C5CE7]/20 text-[#a89bff]">{durationLabel(plan.durationValue, plan.durationUnit)}</span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1">
+                        {DURATION_PRESETS.map(preset => {
+                          const active = (plan.durationValue || 1) === preset.value && (plan.durationUnit || "months") === preset.unit;
+                          return (
+                            <button
+                              key={preset.label}
+                              onClick={() => { const arr = [...plans]; arr[idx] = { ...arr[idx], durationValue: preset.value, durationUnit: preset.unit }; setPlans(arr); toast("Duration set: " + preset.label, "success"); }}
+                              className={`px-2.5 py-1 rounded-full text-[11px] border transition ${active ? "bg-[#6C5CE7] text-white border-[#6C5CE7]" : "bg-[#111] text-[#888] border-[#222] hover:text-white"}`}
+                            >{preset.label}</button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-[#888]">Custom value</label>
+                          <input
+                            type="text" inputMode="numeric"
+                            value={String(plan.durationValue ?? 1)}
+                            onChange={e => { const raw = e.target.value; const v = raw === "" ? 1 : parseInt(raw.replace(/[^0-9]/g, ""), 10); const arr = [...plans]; arr[idx] = { ...arr[idx], durationValue: isFinite(v) && v > 0 ? v : 1 }; setPlans(arr); }}
+                            className="w-full px-3 py-2 rounded-xl bg-[#111] border border-[#222] text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-[#888]">Unit</label>
+                          <select
+                            value={plan.durationUnit || "months"}
+                            onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], durationUnit: e.target.value as DurationUnit }; setPlans(arr); }}
+                            className="w-full px-3 py-2 rounded-xl bg-[#111] border border-[#222] text-sm"
+                          >
+                            <option value="days">Days</option>
+                            <option value="months">Months</option>
+                            <option value="years">Years</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2 text-[11px] text-[#888]">
+                        <input type="checkbox" checked={!!plan.pricePerMonth} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], pricePerMonth: e.target.checked }; setPlans(arr); }} />
+                        Price per month hai (total = price × duration)
+                      </label>
+
+                      <div className="flex items-center justify-between text-[11px] pt-1 border-t border-[#222]">
+                        <span className="text-[#888]">Total charge ({durationLabel(plan.durationValue, plan.durationUnit)}):</span>
+                        <span className="font-semibold text-white">${planTotal(plan).toFixed(2)}</span>
+                      </div>
+                      <p className="text-[10px] text-[#666]">Expiry approve hone par {durationInDays(plan.durationValue, plan.durationUnit)} din baad set hogi</p>
                     </div>
 
                     <div>
@@ -523,6 +580,7 @@ export default function AdminPage() {
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                         <div>
                           <p className="font-medium text-sm">{p.userEmail} • {p.planName} • ${p.amount} • {p.coin}</p>
+                          <p className="text-[11px] text-[#a89bff]">Duration: {p.durationLabel || (() => { const pl = plans.find(x => x.id === p.planId); return pl ? durationLabel(pl.durationValue, pl.durationUnit) : "—"; })()}</p>
                           <p className="text-xs text-[#888] font-mono mt-1 break-all">TXID: {p.txid}</p>
                           {p.screenshot && <a href={p.screenshot} target="_blank" className="text-xs text-[#00D4FF] hover:underline">View Screenshot</a>}
                           <p className="text-[10px] text-[#666] mt-1">{new Date(p.createdAt).toLocaleString()}</p>
@@ -532,11 +590,16 @@ export default function AdminPage() {
                           {p.status === "pending" && (
                             <>
                               <button onClick={() => {
+                                const plan = plans.find(x => x.id === p.planId);
+                                const days = durationInDays(plan?.durationValue, plan?.durationUnit) || (p.durationDays || 30);
                                 setPayments(payments.map(x => x.id === p.id ? { ...x, status: "approved" as const } : x));
-                                // assign plan to user
-                                const updatedUsers = users.map(u => u.email === p.userEmail ? { ...u, planId: p.planId, planExpiry: new Date(Date.now() + 30 * 24 * 3600000).toISOString() } : u);
+                                const expiry = new Date(Date.now() + days * 24 * 3600000).toISOString();
+                                const exists = users.some(u => u.email === p.userEmail);
+                                const updatedUsers = exists
+                                  ? users.map(u => u.email === p.userEmail ? { ...u, planId: p.planId, planExpiry: expiry } : u)
+                                  : [...users, { id: p.userId || "u_" + Date.now(), name: p.userEmail.split("@")[0], email: p.userEmail, planId: p.planId, planExpiry: expiry, status: "active" as const, createdAt: new Date().toISOString() }];
                                 setUsers(updatedUsers);
-                                toast("Payment approved! Plan activated.", "success");
+                                toast(`Payment approved! Plan active for ${plan ? durationLabel(plan.durationValue, plan.durationUnit) : days + " days"}`, "success");
                               }} className="px-4 py-2 rounded-full bg-[#00ff88] text-black text-xs font-medium">Approve</button>
                               <button onClick={() => { setPayments(payments.map(x => x.id === p.id ? { ...x, status: "rejected" as const } : x)); toast("Rejected", "info"); }} className="px-4 py-2 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-xs">Reject</button>
                             </>

@@ -1,5 +1,5 @@
 "use client";
-import { useStore } from "@/lib/store";
+import { useStore, durationLabel, planTotal } from "@/lib/store";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
@@ -33,10 +33,13 @@ export default function Pricing() {
               )}
 
               <h3 className="font-grotesk font-semibold text-lg">{plan.name}</h3>
-              <div className="mt-3 flex items-baseline gap-1">
-                <span className="text-3xl font-bold">${plan.price}</span>
-                <span className="text-[#888] text-sm">/month</span>
+              <div className="mt-3 flex items-baseline gap-1 flex-wrap">
+                <span className="text-3xl font-bold">{plan.price === 0 ? "Free" : `$${planTotal(plan).toFixed(2)}`}</span>
+                {plan.price > 0 && <span className="text-[#888] text-sm">/ {durationLabel(plan.durationValue, plan.durationUnit)}</span>}
               </div>
+              {plan.price > 0 && (
+                <p className="text-[11px] text-[#6C5CE7] mt-1">Valid for {durationLabel(plan.durationValue, plan.durationUnit)} • one-time crypto payment</p>
+              )}
               <div className="mt-2 flex gap-2 text-xs">
                 <span className="px-2 py-1 rounded-full bg-black border border-[#222] text-[#888]">{plan.ram} RAM</span>
                 <span className="px-2 py-1 rounded-full bg-black border border-[#222] text-[#888]">{plan.cpu}</span>
