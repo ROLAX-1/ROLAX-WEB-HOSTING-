@@ -6,50 +6,21 @@ import { motion } from "framer-motion";
 import { setAuth, getAuth } from "@/lib/auth";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, useStore } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
-import { signInWithGoogle, decodeJwt, getGoogleClientId, useGoogleRedirectBridge, completeGoogleSelection, type GoogleProfile } from "@/lib/google";
+import GoogleSignIn from "@/components/GoogleSignIn";
+import type { GoogleProfile } from "@/lib/google";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [bridgeMode, setBridgeMode] = useState(false);
-  const [bridgeEmail, setBridgeEmail] = useState("");
   const hydrate = useStore((s) => s.hydrate);
 
   useEffect(() => { hydrate(); }, [hydrate]);
 
-  const finishGoogle = useCallback((profile: GoogleProfile) => {
-    const isAdmin = profile.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-    setAuth({ id: (profile.sub || "g_" + profile.email).slice(0, 40), name: profile.name, email: profile.email, isAdmin });
-    if (typeof window !== "undefined") {
-      localStorage.setItem("rolax_google_profile", JSON.stringify(profile));
-      localStorage.setItem("rolax_login_method", "google");
-    }
-    toast(`Signed in with Google: ${profile.email}`, "success");
+  const handleGoogleSuccess = useCallback((profile: GoogleProfile, isAdmin: boolean) => {
     router.push(isAdmin ? "/admin" : "/dashboard");
   }, [router]);
-
-  // /login?google=1 -> popup window me Google bridge chalega
-  useGoogleRedirectBridge(useCallback((p: GoogleProfile) => {
-    completeGoogleSelection(p);
-    window.close();
-  }, []));
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setBridgeMode(new URLSearchParams(window.location.search).get("google") === "1");
-  }, []);
-
-  const handleGoogle = () => {
-    setGoogleLoading(true);
-    signInWithGoogle(
-      (profile) => { setGoogleLoading(false); finishGoogle(profile); },
-      (msg) => { setGoogleLoading(false); toast(msg, "error"); }
-    );
-    setTimeout(() => setGoogleLoading(false), 20000);
-  };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,78 +77,6 @@ export default function LoginPage() {
     }, 600);
   };
 
-  // ---- Google popup bridge screen (/login?google=1) ----
-  if (bridgeMode) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center p-4">
-        <div className="w-full max-w-[420px] rounded-2xl bg-white border border-[#dadce0] p-8 shadow-sm">
-          <div className="flex items-center justify-center gap-2 mb-6">
-            <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden>
-              <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.3l7.8 6.1C12.2 13.3 17.6 9.5 24 9.5z"/>
-              <path fill="#4285F4" d="M46.1 24.5c0-1.6-.15-3.1-.43-4.5H24v9h12.4c-.54 2.9-2.2 5.4-4.7 7l7.6 5.9c4.4-4.1 6.8-10.1 6.8-17.4z"/>
-              <path fill="#FBBC05" d="M10.3 28.6c-.5-1.5-.8-3-.8-4.6s.3-3.1.8-4.6l-7.8-6.1C.9 16.3 0 20 0 24s.9 7.7 2.5 10.7l7.8-6.1z"/>
-              <path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.3-5.6l-7.6-5.9c-2.1 1.4-4.8 2.3-7.7 2.3-6.4 0-11.8-3.8-13.7-9.2l-7.8 6.1C6.4 42.6 14.6 48 24 48z"/>
-            </svg>
-            <span className="text-sm text-[#3c4043] font-medium">Sign in with Google</span>
-          </div>
-
-          <h1 className="text-lg font-medium text-[#202124]">Choose an account</h1>
-          <p className="text-sm text-[#5f6368] mt-1">to continue to <span className="font-medium">ROLAX HOST</span></p>
-
-          {bridgeEmail ? (
-            <div className="mt-6 rounded-xl border border-[#dadce0] p-4">
-              <p className="text-xs text-[#5f6368]">Selected account</p>
-              <p className="text-sm font-medium text-[#202124] mt-1 break-all">{bridgeEmail}</p>
-              <div className="mt-4 flex gap-2">
-                <button
-                  onClick={() => {
-                    completeGoogleSelection({ name: bridgeEmail.split("@")[0], email: bridgeEmail });
-                    window.close();
-                  }}
-                  className="flex-1 py-2.5 rounded-full bg-[#1a73e8] text-white text-sm font-medium"
-                >
-                  Continue
-                </button>
-                <button onClick={() => setBridgeEmail("")} className="px-4 py-2.5 rounded-full border border-[#dadce0] text-sm text-[#3c4043]">Back</button>
-              </div>
-            </div>
-          ) : (
-            <form
-              onSubmit={(e) => { e.preventDefault(); if (bridgeEmail.trim()) return; }}
-              className="mt-6"
-            >
-              <input
-                value={bridgeEmail}
-                onChange={(e) => setBridgeEmail(e.target.value)}
-                type="email"
-                autoFocus
-                placeholder="your.name@gmail.com"
-                className="w-full px-4 py-3 rounded-lg border border-[#dadce0] text-sm text-[#202124] focus:outline-none focus:border-[#1a73e8]"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (!bridgeEmail.trim()) return;
-                  completeGoogleSelection({ name: bridgeEmail.split("@")[0], email: bridgeEmail.trim() });
-                  window.close();
-                }}
-                className="mt-3 w-full py-2.5 rounded-full bg-[#1a73e8] text-white text-sm font-medium disabled:opacity-50"
-                disabled={!bridgeEmail.trim()}
-              >
-                Next
-              </button>
-              <p className="text-[11px] text-[#5f6368] mt-3">
-                Ye window Google account chooser se khuli hai. Apna Gmail daalo — parent tab me automatic sign in ho jayega.
-              </p>
-            </form>
-          )}
-
-          <button onClick={() => { window.location.href = "/login"; }} className="mt-5 text-xs text-[#1a73e8]">← Email se sign in karein</button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-black flex items-center justify-center p-4 relative overflow-hidden">
       <div className="absolute inset-0 grid-bg opacity-30" />
@@ -215,23 +114,7 @@ export default function LoginPage() {
             <div className="h-px flex-1 bg-[#222]" />
           </div>
 
-          <button
-            type="button"
-            onClick={handleGoogle}
-            disabled={googleLoading}
-            className="w-full py-3 rounded-full bg-white text-black font-medium text-sm flex items-center justify-center gap-3 hover:bg-zinc-100 transition disabled:opacity-60"
-          >
-            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden>
-              <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.3l7.8 6.1C12.2 13.3 17.6 9.5 24 9.5z"/>
-              <path fill="#4285F4" d="M46.1 24.5c0-1.6-.15-3.1-.43-4.5H24v9h12.4c-.54 2.9-2.2 5.4-4.7 7l7.6 5.9c4.4-4.1 6.8-10.1 6.8-17.4z"/>
-              <path fill="#FBBC05" d="M10.3 28.6c-.5-1.5-.8-3-.8-4.6s.3-3.1.8-4.6l-7.8-6.1C.9 16.3 0 20 0 24s.9 7.7 2.5 10.7l7.8-6.1z"/>
-              <path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.3-5.6l-7.6-5.9c-2.1 1.4-4.8 2.3-7.7 2.3-6.4 0-11.8-3.8-13.7-9.2l-7.8 6.1C6.4 42.6 14.6 48 24 48z"/>
-            </svg>
-            {googleLoading ? "Connecting to Google..." : "Continue with Google"}
-          </button>
-          <p className="text-center text-[11px] text-[#666] mt-2">
-            Google account se instant sign in — password ki zarurat nahi
-          </p>
+          <GoogleSignIn label="Continue with Google" onSuccess={handleGoogleSuccess} />
 
           <p className="text-center text-sm text-[#888] mt-6">
             Don&apos;t have an account? <Link href="/register" className="text-white hover:underline">Create account</Link>

@@ -1,146 +1,123 @@
 "use client";
-import { useEffect, useState } from "react";
 import { setAuth } from "./auth";
 
 const CLIENT_ID_KEY = "rolax_google_client_id";
-const STORAGE_KEY = "rolax_google_pending";
-// Public OAuth client for ROLAX HOST (overridable from admin panel or env)
 const DEFAULT_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
 export function getGoogleClientId(): string {
   if (typeof window === "undefined") return DEFAULT_CLIENT_ID;
-  return localStorage.getItem(CLIENT_ID_KEY) || DEFAULT_CLIENT_ID;
+  return (localStorage.getItem(CLIENT_ID_KEY) || DEFAULT_CLIENT_ID || "").trim();
 }
 
 export function setGoogleClientId(id: string) {
   if (typeof window !== "undefined") localStorage.setItem(CLIENT_ID_KEY, id.trim());
 }
 
+export function hasRealGoogle(): boolean {
+  return !!getGoogleClientId();
+}
+
+export type GoogleProfile = { name: string; email: string; picture?: string; sub?: string };
+
 export function decodeJwt(token: string): any {
   try {
     const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    const json = decodeURIComponent(
-      atob(payload)
-        .split("")
-        .map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-        .join("")
+    return JSON.parse(
+      decodeURIComponent(
+        atob(payload)
+          .split("")
+          .map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+          .join("")
+      )
     );
-    return JSON.parse(json);
   } catch {
     return null;
   }
 }
 
-export type GoogleProfile = { name: string; email: string; picture?: string; sub?: string };
+let scriptPromise: Promise<boolean> | null = null;
 
-/** Google account se login karo (GIS if configured, warna Google chooser popup) */
-export function signInWithGoogle(onDone: (profile: GoogleProfile) => void, onError: (msg: string) => void) {
-  if (typeof window === "undefined") return;
+/** Google Identity Services script load (idempotent, koi 404 nahi) */
+export function loadGoogleScript(): Promise<boolean> {
+  if (typeof window === "undefined") return Promise.resolve(false);
+  if ((window as any).google?.accounts?.id) return Promise.resolve(true);
+  if (scriptPromise) return scriptPromise;
 
-  const clientId = getGoogleClientId();
-  if (clientId && (window as any).google?.accounts?.id) {
-    try {
-      (window as any).google.accounts.id.initialize({
-        client_id: clientId,
-        callback: (res: any) => {
-          const p = decodeJwt(res.credential);
-          if (p?.email) onDone({ name: p.name || p.email.split("@")[0], email: p.email, picture: p.picture, sub: p.sub });
-          else onError("Google credential padhne me dikkat aayi");
-        },
-      });
-      (window as any).google.accounts.id.prompt();
+  scriptPromise = new Promise<boolean>((resolve) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[data-rolax-gsi="1"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve(!!(window as any).google?.accounts?.id));
+      existing.addEventListener("error", () => resolve(false));
       return;
-    } catch {
-      /* fall through to popup chooser */
     }
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.dataset.rolaxGsi = "1";
+    script.onload = () => resolve(!!(window as any).google?.accounts?.id);
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+
+  return scriptPromise;
+}
+
+/** Official Google button ko element me render karo (real Google OAuth) */
+export async function renderGoogleButton(
+  el: HTMLElement | null,
+  onDone: (p: GoogleProfile) => void,
+  onError: (msg: string) => void
+): Promise<boolean> {
+  const clientId = getGoogleClientId();
+  if (!el || !clientId) return false;
+  const ok = await loadGoogleScript();
+  if (!ok) { onError("Google script load nahi hui — internet/domain check karo"); return false; }
+
+  try {
+    (window as any).google.accounts.id.initialize({
+      client_id: clientId,
+      ux_mode: "popup",
+      callback: (res: any) => {
+        const p = decodeJwt(res?.credential || "");
+        if (p?.email) onDone({ name: p.name || p.email.split("@")[0], email: p.email, picture: p.picture, sub: p.sub });
+        else onError("Google se email nahi mili — dobara try karo");
+      },
+    });
+    el.innerHTML = "";
+    (window as any).google.accounts.id.renderButton(el, {
+      theme: "filled_blue",
+      size: "large",
+      text: "continue_with",
+      shape: "pill",
+      width: 300,
+      logo_alignment: "left",
+    });
+    return true;
+  } catch {
+    onError("Google button render nahi hua — Client ID / Authorized origin check karo");
+    return false;
   }
-
-  openGoogleChooser(onDone, onError);
 }
 
-/** Fallback: Google account chooser popup (koi client id ki zarurat nahi) */
-export function openGoogleChooser(onDone: (profile: GoogleProfile) => void, onError: (msg: string) => void) {
-  const origin = window.location.origin;
-  const popup = window.open(
-    "https://accounts.google.com/AccountChooser?continue=" + encodeURIComponent(origin + "/login?google=1"),
-    "rolax_google_signin",
-    "width=480,height=640,menubar=no,toolbar=no"
-  );
-
-  if (!popup) {
-    onError("Popup block ho gaya — browser me popup allow karo ya email se login karo");
-    return;
-  }
-
-  // Naya window jaise hi /login?google=1 load hoga, wahan se email localStorage me aa jayega.
-  sessionStorage.setItem("rolax_google_flow", "1");
-
-  const started = Date.now();
-  const timer = window.setInterval(() => {
-    try {
-      if (popup.closed) {
-        window.clearInterval(timer);
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          localStorage.removeItem(STORAGE_KEY);
-          onDone(JSON.parse(raw));
-        }
-        return;
-      }
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        window.clearInterval(timer);
-        localStorage.removeItem(STORAGE_KEY);
-        popup.close();
-        onDone(JSON.parse(raw));
-      }
-      if (Date.now() - started > 180000) {
-        window.clearInterval(timer);
-        popup.close();
-      }
-    } catch {
-      /* ignore cross-origin access errors */
+/** Google profile se local session banao (shared by both modes) */
+export function finishGoogleLogin(profile: GoogleProfile, adminEmail: string) {
+  const isAdmin = profile.email.toLowerCase() === adminEmail.toLowerCase();
+  const id = (profile.sub || "g_" + profile.email).slice(0, 40);
+  setAuth({ id, name: profile.name, email: profile.email, isAdmin });
+  try {
+    localStorage.setItem("rolax_google_profile", JSON.stringify(profile));
+    localStorage.setItem("rolax_login_method", "google");
+    const users = JSON.parse(localStorage.getItem("rolax_users") || "[]");
+    if (!users.find((u: any) => u.email === profile.email)) {
+      users.push({ id, name: profile.name, email: profile.email, status: "active", createdAt: new Date().toISOString() });
+      localStorage.setItem("rolax_users", JSON.stringify(users));
     }
-  }, 800);
+  } catch { /* ignore storage errors */ }
+  return { isAdmin };
 }
 
-/** /login?google=1 par Google account ka email pakad ke parent flow ko de do */
-export function useGoogleRedirectBridge(onProfile: (p: GoogleProfile) => void) {
-  const [waiting, setWaiting] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("google") !== "1") return;
-
-    const clientId = getGoogleClientId();
-    if (clientId) {
-      // Real Google Identity Services: one tap / button render
-      const script = document.createElement("script");
-      script.src = "https://accounts.google.com/gsi/client";
-      script.async = true;
-      script.onload = () => {
-        try {
-          (window as any).google.accounts.id.initialize({
-            client_id: clientId,
-            callback: (res: any) => {
-              const p = decodeJwt(res.credential);
-              if (p?.email) onProfile({ name: p.name || p.email.split("@")[0], email: p.email, picture: p.picture, sub: p.sub });
-            },
-          });
-          (window as any).google.accounts.id.prompt();
-        } catch { /* ignore */ }
-      };
-      document.head.appendChild(script);
-    }
-
-    // Email based bridge (Google session se email khud bhar jata hai)
-    setWaiting(true);
-  }, [onProfile]);
-
-  return { waiting };
-}
-
-export function completeGoogleSelection(profile: GoogleProfile) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+/** Email validate — Gmail/Google account format */
+export function isValidGmailish(email: string) {
+  return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email.trim());
 }
