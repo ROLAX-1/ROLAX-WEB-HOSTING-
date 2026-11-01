@@ -8,6 +8,8 @@ import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { analyzeSite, autoFixSite, needsManualAction, MAX_ERRORS } from "@/lib/hosting";
 import { getGoogleClientId, setGoogleClientId } from "@/lib/google";
+import { FEATURE_CATALOG, planEntitlements } from "@/lib/entitlements";
+import { getBotToken } from "@/lib/bottoken";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -17,6 +19,8 @@ export default function AdminPage() {
   const [search, setSearch] = useState("");
   const [gClientId, setGClientId] = useState("");
   const [openCheckSite, setOpenCheckSite] = useState<string | null>(null);
+  const [filesSite, setFilesSite] = useState<any>(null);
+  const [viewFile, setViewFile] = useState<{ name: string; content: string } | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { setGClientId(getGoogleClientId()); }, []);
@@ -505,6 +509,41 @@ export default function AdminPage() {
                       <p className="text-[10px] text-[#666]">Expiry approve hone par {durationInDays(plan.durationValue, plan.durationUnit)} din baad set hogi</p>
                     </div>
 
+                    {/* ---- Feature access (free vs premium) ---- */}
+                    <div className="rounded-xl bg-black border border-[#222] p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] text-[#888] font-semibold">Kaun se features is plan me milenge</label>
+                        <div className="flex gap-1">
+                          <button onClick={() => { const arr = [...plans]; arr[idx] = { ...arr[idx], entitlements: { deploy: true, custom_domain: false, ai_autofix: false, ai_review: false, bot_24x7: false, priority_support: false } }; setPlans(arr); toast("Free profile lagaya", "success"); }} className="px-2 py-0.5 rounded-full bg-[#222] text-[10px]">Free</button>
+                          <button onClick={() => { const arr = [...plans]; arr[idx] = { ...arr[idx], entitlements: { deploy: true, custom_domain: true, ai_autofix: true, ai_review: true, bot_24x7: true, priority_support: true } }; setPlans(arr); toast("Premium profile lagaya", "success"); }} className="px-2 py-0.5 rounded-full bg-[#6C5CE7] text-white text-[10px]">Ultra Pro</button>
+                        </div>
+                      </div>
+                      {FEATURE_CATALOG.map(f => {
+                        const ent = planEntitlements(plan);
+                        const on = !!ent[f.id];
+                        return (
+                          <label key={f.id} className="flex items-start gap-2 p-2 rounded-lg hover:bg-[#111] cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={e => {
+                                const arr = [...plans];
+                                const cur = planEntitlements(arr[idx]);
+                                arr[idx] = { ...arr[idx], entitlements: { ...cur, [f.id]: e.target.checked } };
+                                setPlans(arr);
+                              }}
+                              className="mt-0.5"
+                            />
+                            <span className="flex-1">
+                              <span className={`text-[11px] ${on ? "text-white" : "text-[#666]"}`}>{f.icon} {f.label}</span>
+                              <span className="block text-[10px] text-[#555]">{f.desc}</span>
+                            </span>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${on ? "bg-[#00ff88]/15 text-[#00ff88]" : "bg-[#333] text-[#888]"}`}>{on ? "ON" : "OFF"}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+
                     <div>
                       <label className="text-[10px] text-[#888]">Features (one per line)</label>
                       <textarea value={plan.features.join("\n")} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], features: e.target.value.split("\n") }; setPlans(arr); }} onBlur={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], features: e.target.value.split("\n").map(f => f.trim()).filter(Boolean) }; setPlans(arr); }} rows={4} className="w-full mt-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
@@ -748,17 +787,9 @@ export default function AdminPage() {
                                 toast("Status toggled", "success");
                               }
                             }} className={`px-2 py-1 rounded-full text-xs ${w.status === "Error" ? "bg-yellow-500/15 text-yellow-400 border border-yellow-500/30" : "bg-[#222]"}`}>{w.status === "Error" ? "⚡ Auto-Fix" : w.status === "Running" ? "Stop" : "Start"}</button>
-                            <button onClick={() => {
-                              // Download hosted file simulation
-                              const blob = new Blob([`// Hosted file: ${w.name}\n// Stack: ${w.stack}\n// Type: ${(w as any).botType || (w as any).fileType}\n// Downloaded from ROLAX HOST\nconsole.log("Hello from ${w.name}");`], {type: "text/plain"});
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement("a");
-                              a.href = url;
-                              a.download = `${w.name}.zip`;
-                              a.click();
-                              toast("Downloaded: " + w.name + ".zip", "success");
-                            }} className="px-2 py-1 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20 text-xs">Download</button>
+                            <button onClick={() => { setFilesSite(w); }} className="px-2 py-1 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20 text-xs">Download</button>
                             <button onClick={() => setOpenCheckSite(openCheckSite === w.id ? null : w.id)} className="px-2 py-1 rounded-full bg-[#6C5CE7]/15 border border-[#6C5CE7]/30 text-[#a89bff] text-xs">Checks</button>
+                            <button onClick={() => setFilesSite(w)} className="px-2 py-1 rounded-full bg-white/10 border border-white/20 text-white text-xs">Files</button>
                             <a href={`/site/${encodeURIComponent(w.name.toLowerCase().replace(/\s+/g, "-"))}`} target="_blank" className="px-2 py-1 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20 text-xs">Open</a>
                             <button onClick={() => { if (confirm("Delete hosted file?")) { setWebsites(websites.filter(x => x.id !== w.id)); toast("Deleted", "info"); } }} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-xs">Delete</button>
                           </div>
@@ -798,6 +829,70 @@ export default function AdminPage() {
               })()}
 
               <p className="text-xs text-[#666]">💡 Har file ka asli deploy report (bot token verify, dependencies, syntax) — <strong>Checks</strong> button se dekho. Auto-fix: Errors &lt; 5 → fix, ≥5 → delete alert.</p>
+            </div>
+          )}
+
+          {filesSite && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+              <div className="w-full max-w-[820px] rounded-2xl bg-[#111] border border-[#222] p-6 max-h-[88vh] overflow-auto">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-grotesk font-bold">Uploaded Files — {filesSite.name}</h3>
+                    <p className="text-xs text-[#888] mt-1">{filesSite.botType || filesSite.fileType} • {filesSite.fileCount || (filesSite.src?.length ?? 0)} files • entry: {filesSite.entryFile || "—"}</p>
+                    <p className="text-[11px] text-[#666]">User: {users.find(u => u.id === filesSite.userId)?.email || filesSite.userId} • {filesSite.fileSize || "—"}</p>
+                  </div>
+                  <button onClick={() => { setFilesSite(null); setViewFile(null); }} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button onClick={() => {
+                    const all = (filesSite.src || []).map((f: any) => `// ===== ${f.name} =====\n${f.content}`).join("\n\n");
+                    const blob = new Blob([all || `// no source\n// ${filesSite.name}`], { type: "text/plain" });
+                    const a = document.createElement("a");
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `${filesSite.name}-source.txt`;
+                    a.click();
+                    toast("Downloaded source", "success");
+                  }} className="px-4 py-2 rounded-full bg-white text-black text-xs font-medium">⬇ Download all (txt)</button>
+                  <button onClick={() => {
+                    const all = (filesSite.src || []).map((f: any) => `===== ${f.name} =====\n${f.content}`).join("\n\n");
+                    navigator.clipboard.writeText(all);
+                    toast("Source clipboard me copy ho gaya", "success");
+                  }} className="px-4 py-2 rounded-full bg-[#222] text-xs">Copy all</button>
+                  <button onClick={() => {
+                    const token = getBotToken(filesSite.id);
+                    if (!token) { toast("Is site ka token browser me nahi mila (doosre browser se deploy hua hoga)", "error"); return; }
+                    navigator.clipboard.writeText(token);
+                    toast("Bot token copy ho gaya", "success");
+                  }} className="px-4 py-2 rounded-full bg-[#00ff88]/15 border border-[#00ff88]/25 text-[#00ff88] text-xs">Copy bot token</button>
+                  <a href={`/site/${encodeURIComponent(filesSite.name.toLowerCase().replace(/\s+/g, "-"))}`} target="_blank" className="px-4 py-2 rounded-full bg-[#00D4FF]/10 border border-[#00D4FF]/20 text-[#00D4FF] text-xs">Open site</a>
+                </div>
+
+                <div className="mt-4 grid md:grid-cols-[260px_1fr] gap-3">
+                  <div className="rounded-xl bg-black border border-[#222] p-2 max-h-[45vh] overflow-auto">
+                    {(!filesSite.src || filesSite.src.length === 0) && <p className="text-[11px] text-[#666] p-2">Source stored nahi hai (purana deploy ya doosra browser).</p>}
+                    {(filesSite.src || []).map((f: any, i: number) => (
+                      <button key={i} onClick={() => setViewFile(f)} className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-mono truncate ${viewFile?.name === f.name ? "bg-white text-black" : "text-[#bbb] hover:bg-[#111]"}`}>
+                        {viewFile?.name === f.name ? "▸ " : "  "}{f.name}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="rounded-xl bg-black border border-[#222] p-3 max-h-[45vh] overflow-auto">
+                    {viewFile ? (
+                      <>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-[11px] text-[#00D4FF] font-mono">{viewFile.name}</p>
+                          <button onClick={() => { navigator.clipboard.writeText(viewFile.content); toast("Copied", "success"); }} className="text-[10px] px-2 py-0.5 rounded-full bg-[#222]">Copy</button>
+                        </div>
+                        <pre className="text-[11px] text-[#ddd] whitespace-pre-wrap break-words font-mono">{viewFile.content}</pre>
+                      </>
+                    ) : (
+                      <p className="text-[11px] text-[#666]">Koi file select karo (left list se).</p>
+                    )}
+                  </div>
+                </div>
+                <p className="text-[10px] text-[#555] mt-2">Admin kisi bhi hosted file ka pura code dekh/download kar sakta hai. Token sirf usi browser me copy ho sakta hai jahan deploy hua tha.</p>
+              </div>
             </div>
           )}
 

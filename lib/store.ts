@@ -8,6 +8,7 @@ export type Plan = {
   durationValue?: number;   // jaise 3
   durationUnit?: DurationUnit; // "days" | "months" | "years"
   pricePerMonth?: boolean;  // price ko per-month treat karna hai (total = price x months)
+  entitlements?: Record<string, boolean>; // kaun se features is plan me milte hain
   ram: string;
   cpu: string;
   storage: string;
@@ -273,6 +274,7 @@ function sanitizePlans(input: any): Plan[] {
         durationValue: p.durationValue ? Math.max(1, Math.floor(num(p.durationValue))) : 1,
         durationUnit: p.durationUnit === "days" || p.durationUnit === "years" || p.durationUnit === "months" ? p.durationUnit : "months",
         pricePerMonth: !!p.pricePerMonth,
+        entitlements: p.entitlements && typeof p.entitlements === "object" ? p.entitlements : undefined,
       } as Plan;
     });
   return clean.length ? clean : defaultPlans;

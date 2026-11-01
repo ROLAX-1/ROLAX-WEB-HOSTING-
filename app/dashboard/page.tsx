@@ -8,6 +8,7 @@ import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, extr
 import { saveBotToken, getBotToken, removeBotToken } from "@/lib/bottoken";
 import { extractCommands } from "@/lib/botruntime";
 import { useBotStatus, restartBot } from "@/components/BotWorker";
+import { hasFeature, planStatusFor, planEntitlements } from "@/lib/entitlements";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
 
@@ -35,6 +36,8 @@ export default function DashboardPage() {
   const [botPanelSite, setBotPanelSite] = useState<any>(null);
   const [manualToken, setManualToken] = useState("");
   const [fixToken, setFixToken] = useState("");
+  const [aiFix, setAiFix] = useState<{ engine: string; summary: string; notes: string[]; fixes: any[] } | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
   const [logsSite, setLogsSite] = useState<any>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
@@ -58,6 +61,10 @@ export default function DashboardPage() {
   const myTickets = tickets.filter(t => t.userId === auth.id);
   const myPlan = plans.find(p => p.id === (users.find(u => u.email === auth.email)?.planId || ""));
   const pendingPayment = myPayments.find(p => p.status === "pending");
+  const me = users.find(u => u.email === auth.email);
+  const status = planStatusFor(me, plans);
+  const canAiFix = hasFeature(status.plan, "ai_autofix", status.expired);
+  const can24x7 = hasFeature(status.plan, "bot_24x7", status.expired);
   const rate = settings?.usdToInr || 88;
   const inr = (usd: number) => Math.round(usd * rate);
   const priceLabel = (usd: number) => (usd === 0 ? "Free" : `$${usd} / ₹${inr(usd)}`);
@@ -204,7 +211,7 @@ export default function DashboardPage() {
               <img src={gProfile.picture} alt="Google" className="w-7 h-7 rounded-full border border-[#333]" referrerPolicy="no-referrer" />
             )}
             <span className="hidden md:inline text-xs text-[#888]">{auth.email}{gProfile ? " • Google" : ""}</span>
-            <span className={`px-3 py-1 rounded-full text-xs font-medium border ${myPlan ? "bg-[#00ff88]/10 text-[#00ff88] border-[#00ff88]/20" : "bg-[#888]/10 text-[#888] border-[#222]"}`}>{myPlan?.name || "Free Plan"}</span>
+            <span className={`px-3 py-1 rounded-full text-xs font-medium border ${status.expired ? "bg-red-500/10 text-red-400 border-red-500/25" : myPlan ? "bg-[#00ff88]/10 text-[#00ff88] border-[#00ff88]/20" : "bg-[#888]/10 text-[#888] border-[#222]"}`}>{status.expired ? "Expired" : status.planName}{status.daysLeft !== undefined && !status.expired ? ` • ${status.daysLeft}d` : ""}</span>
             <button onClick={() => { clearAuth(); router.push("/"); }} className="px-4 py-2 rounded-full bg-[#111] border border-[#222] text-sm hover:border-[#333]">Logout</button>
           </div>
         </div>
@@ -240,8 +247,10 @@ export default function DashboardPage() {
               </div>
               <div className="rounded-2xl bg-[#111] border border-[#222] p-5">
                 <p className="text-xs text-[#888]">Plan Expiry</p>
-                <p className="text-sm font-semibold mt-1">{users.find(u => u.email === auth.email)?.planExpiry ? new Date(users.find(u => u.email === auth.email)!.planExpiry!).toLocaleDateString() : "—"}</p>
-                <p className="text-xs text-[#666] mt-1">{pendingPayment ? "Pending approval" : "Active"}</p>
+                <p className="text-sm font-semibold mt-1">{status.expiresAt ? new Date(status.expiresAt).toLocaleDateString() : "—"}</p>
+                <p className={`text-xs mt-1 ${status.expired ? "text-red-400" : "text-[#00ff88]"}`}>
+                  {status.expired ? "Expired — renew karo" : status.daysLeft !== undefined ? `${status.daysLeft}d ${status.hoursLeft}h bache • 24/7 ON` : pendingPayment ? "Pending approval" : "Active"}
+                </p>
               </div>
               <div className="rounded-2xl bg-gradient-to-br from-[#6C5CE7]/20 to-[#00D4FF]/20 border border-[#6C5CE7]/20 p-5">
                 <p className="text-xs text-[#a89bff]">Need help?</p>
@@ -593,7 +602,7 @@ export default function DashboardPage() {
 
       {/* Bot 24/7 status panel */}
       {botPanelSite && (
-        <BotLivePanel site={botPanelSite} onClose={() => setBotPanelSite(null)} onDeleted={() => { setWebsites(websites.filter(x => x.id !== botPanelSite.id)); removeBotToken(botPanelSite.id); setBotPanelSite(null); }} />
+        <BotLivePanel site={botPanelSite} can247={can24x7} planLabel={status.label} expired={status.expired} onUpgrade={() => { setBotPanelSite(null); setTab("billing"); }} onClose={() => setBotPanelSite(null)} onDeleted={() => { setWebsites(websites.filter(x => x.id !== botPanelSite.id)); removeBotToken(botPanelSite.id); setBotPanelSite(null); }} />
       )}
 
       {/* Deploy Verification Report Modal */}
@@ -637,6 +646,63 @@ export default function DashboardPage() {
                   <p className="text-[10px] text-[#555] mt-1 font-mono">{c.code}</p>
                 </div>
               ))}
+            </div>
+
+            {/* AI AUTO-FIX */}
+            <div className={`mt-4 rounded-2xl p-4 border ${canAiFix ? "bg-[#6C5CE7]/10 border-[#6C5CE7]/40" : "bg-[#111] border-[#222]"}`}>
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold text-white">🤖 AI Auto-Fix {canAiFix ? "" : "— Ultra Pro only"}</p>
+                  <p className="text-[10px] text-[#888] mt-0.5">
+                    {canAiFix ? "AI tumhara code padhkar errors khud fix karega, phir dobara verify hoga." : `Ye feature sirf Ultra Pro plan me hai. Tumhara plan: ${status.planName}.`}
+                  </p>
+                </div>
+                <button
+                  disabled={!canAiFix || aiBusy}
+                  onClick={async () => {
+                    if (!canAiFix) { toast("AI Auto-Fix sirf Ultra Pro plan me hai — upgrade karo", "error"); return; }
+                    setAiBusy(true);
+                    try {
+                      const res = await fetch("/api/ai/autofix", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ files: reportSite.src || [], checks: lastReport.checks, stack: lastReport.stack }),
+                      });
+                      const j = await res.json();
+                      if (!j.ok) { toast(j.error || "AI fix fail hua", "error"); setAiBusy(false); return; }
+                      setAiFix(j);
+                      if (!j.fixes?.length) { toast("AI ko koi fixable error nahi mila", "info"); setAiBusy(false); return; }
+                      // patches apply karo
+                      const nextFiles = (reportSite.src || []).map((f: any) => {
+                        const patch = j.fixes.find((x: any) => x.file === f.name || x.file.endsWith(f.name));
+                        return patch ? { name: f.name, content: patch.code } : f;
+                      });
+                      j.fixes.forEach((x: any) => { if (!nextFiles.some((f: any) => f.name === x.file)) nextFiles.push({ name: x.file, content: x.code }); });
+                      const reReport = await runDeployChecks({ files: nextFiles, binaryCount: 0, totalBytes: 0 });
+                      const fields = reportToSiteFields(reReport);
+                      setWebsites(websites.map(w => w.id === reportSite.id ? { ...w, ...fields, stack: reReport.stack, src: nextFiles.map((f: any) => ({ name: f.name, content: f.content.slice(0, 4000) })) } as any : w));
+                      setLastReport(reReport);
+                      setReportSite({ ...reportSite, ...fields, src: nextFiles });
+                      toast(`AI (${j.engine}) ne ${j.fixes.length} file fix ki — ${reReport.ok ? "ab sab pass ✅" : "kuch errors bache hain"}`, reReport.ok ? "success" : "info");
+                    } catch (e: any) {
+                      toast("AI fix error: " + e.message, "error");
+                    }
+                    setAiBusy(false);
+                  }}
+                  className={`px-4 py-2 rounded-full text-xs font-medium shrink-0 ${canAiFix ? "bg-white text-black" : "bg-[#222] text-[#666] cursor-not-allowed"}`}
+                >
+                  {aiBusy ? "AI soch raha hai..." : canAiFix ? "Fix with AI ✨" : "🔒 Locked"}
+                </button>
+              </div>
+              {aiFix && (
+                <div className="mt-2 rounded-xl bg-black border border-[#222] p-2">
+                  <p className="text-[11px] text-[#a89bff]">{aiFix.engine.toUpperCase()}: {aiFix.summary}</p>
+                  {aiFix.fixes.map((f: any, i: number) => (
+                    <p key={i} className="text-[10px] text-[#888] mt-1">• {f.file} — {f.reason}</p>
+                  ))}
+                  {aiFix.notes?.map((n, i) => <p key={i} className="text-[10px] text-[#666] mt-1">💡 {n}</p>)}
+                </div>
+              )}
             </div>
 
             {!lastReport.ok && lastReport.errors.some(e => e.code === "NO_TOKEN" || e.code === "TOKEN_BAD") && (
@@ -808,11 +874,11 @@ export default function DashboardPage() {
 }
 
 /* ---------------- Bot 24/7 live panel ---------------- */
-function BotLivePanel({ site, onClose, onDeleted }: { site: any; onClose: () => void; onDeleted: () => void }) {
+function BotLivePanel({ site, onClose, onDeleted, can247, planLabel, expired, onUpgrade }: { site: any; onClose: () => void; onDeleted: () => void; can247: boolean; planLabel: string; expired: boolean; onUpgrade: () => void }) {
   const rt = useBotStatus(site.id);
   const token = getBotToken(site.id);
   const cmds = rt?.commands?.length ? rt.commands : extractCommands(site.src || []);
-  const online = rt?.status === "online";
+  const online = rt?.status === "online" && can247;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
@@ -825,10 +891,21 @@ function BotLivePanel({ site, onClose, onDeleted }: { site: any; onClose: () => 
           <button onClick={onClose} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
         </div>
 
+        {!can247 && (
+          <div className="mt-4 rounded-2xl bg-red-500/10 border border-red-500/30 p-4">
+            <p className="text-sm font-semibold text-red-300">🔒 24/7 hosting band hai</p>
+            <p className="text-[11px] text-red-200/80 mt-1">
+              {expired ? "Tumhara plan expire ho gaya — renew karte hi bot phir 24/7 chalu ho jayega." : "Tumhare plan me 24/7 bot hosting nahi hai. Ultra Pro plan me ye feature milta hai."}
+            </p>
+            <p className="text-[10px] text-[#999] mt-1">Current: {planLabel}</p>
+            <button onClick={onUpgrade} className="mt-2 px-4 py-2 rounded-full bg-white text-black text-xs font-medium">Upgrade / Renew →</button>
+          </div>
+        )}
+
         <div className={`mt-4 rounded-2xl p-4 border ${online ? "bg-[#00ff88]/5 border-[#00ff88]/25" : "bg-yellow-500/5 border-yellow-500/25"}`}>
           <div className="flex items-center justify-between">
             <p className={`text-sm font-semibold ${online ? "text-[#00ff88]" : "text-yellow-400"}`}>
-              {online ? "● ONLINE — 24/7 chalu hai" : rt?.status === "error" ? "✕ Token problem" : "◐ Starting..."}
+              {!can247 ? "● OFFLINE — plan requirement" : online ? "● ONLINE — 24/7 chalu hai" : rt?.status === "error" ? "✕ Token problem" : "◐ Starting..."}
             </p>
             {rt?.username && <span className="text-xs text-[#00D4FF]">@{rt.username}</span>}
           </div>

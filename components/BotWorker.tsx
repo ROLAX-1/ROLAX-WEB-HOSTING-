@@ -4,6 +4,7 @@ import { useStore, type Website } from "@/lib/store";
 import { getBotToken } from "@/lib/bottoken";
 import { extractCommands, type BotCommand, type BotRuntimeState } from "@/lib/botruntime";
 import { toast } from "@/components/ui/Toaster";
+import { hasFeature, planStatusFor } from "@/lib/entitlements";
 
 /**
  * BotWorker — poore app me background me chalta hai.
@@ -98,11 +99,27 @@ export default function BotWorker() {
     if (!hydrated || running) return;
     running = true;
     try {
-      const bots = useStore.getState().websites.filter(w =>
-        w.status !== "Error" &&
-        (w.botType || "").toLowerCase().match(/telegram/) &&
-        getBotToken(w.id)
-      );
+      const store = useStore.getState();
+      const plans = store.plans;
+      const users = store.users;
+      const bots = store.websites.filter(w => {
+        if (w.status === "Error") return false;
+        if (!/telegram/i.test(w.botType || "")) return false;
+        if (!getBotToken(w.id)) return false;
+        // plan gate: plan chalu hai ya expired?
+        const owner = users.find(u => u.id === w.userId || u.email === w.userId);
+        const st = planStatusFor(owner, plans);
+        // plan chalu hai to 24/7; expired/free to nahi
+        return hasFeature(st.plan, "bot_24x7", st.expired);
+      });
+      // expired plan wale bots ko offline mark karo
+      store.websites.filter(w => /telegram/i.test(w.botType || "")).forEach(w => {
+        const owner = users.find(u => u.id === w.userId || u.email === w.userId);
+        const st = planStatusFor(owner, plans);
+        if (hasFeature(st.plan, "bot_24x7", st.expired) === false) {
+          state[w.id] = { ...(state[w.id] || { responses: 0, errors: 0, commands: [] }), status: "offline", lastError: st.expired ? "Plan expired — renew karo" : "Is plan me 24/7 hosting nahi hai (Ultra Pro lo)" };
+        }
+      });
       await Promise.all(bots.map(b => pollOne(b)));
       force(n => n + 1);
     } finally {
