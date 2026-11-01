@@ -95,6 +95,7 @@ export type Website = {
   deployedAt?: string;
   fileSize?: string;
   checks?: { code: string; title: string; detail: string; level: "ok" | "warn" | "error"; fixable: boolean }[];
+  bundle?: { path: string; content: string; type: string }[];
   botUsername?: string;
   tokenMasked?: string;
   fileCount?: number;
@@ -306,6 +307,7 @@ function sanitizeWebsites(input: any): Website[] {
       botType: w.botType ? String(w.botType) : undefined,
       errorCount: Math.max(0, Math.floor(num(w.errorCount))),
       checks: Array.isArray(w.checks) ? w.checks : undefined,
+      bundle: Array.isArray(w.bundle) ? w.bundle : undefined,
       botUsername: w.botUsername ? String(w.botUsername) : undefined,
       tokenMasked: w.tokenMasked ? String(w.tokenMasked) : undefined,
       fileCount: w.fileCount ? Math.floor(num(w.fileCount)) : undefined,

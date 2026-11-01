@@ -759,6 +759,7 @@ export default function AdminPage() {
                               toast("Downloaded: " + w.name + ".zip", "success");
                             }} className="px-2 py-1 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20 text-xs">Download</button>
                             <button onClick={() => setOpenCheckSite(openCheckSite === w.id ? null : w.id)} className="px-2 py-1 rounded-full bg-[#6C5CE7]/15 border border-[#6C5CE7]/30 text-[#a89bff] text-xs">Checks</button>
+                            <a href={`/site/${encodeURIComponent(w.name.toLowerCase().replace(/\s+/g, "-"))}`} target="_blank" className="px-2 py-1 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20 text-xs">Open</a>
                             <button onClick={() => { if (confirm("Delete hosted file?")) { setWebsites(websites.filter(x => x.id !== w.id)); toast("Deleted", "info"); } }} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-xs">Delete</button>
                           </div>
                         </td>

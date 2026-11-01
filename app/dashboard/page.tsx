@@ -14,7 +14,7 @@ export default function DashboardPage() {
   const [auth, setAuth] = useState<any>(null);
   const [tab, setTab] = useState("overview");
   const [showDeploy, setShowDeploy] = useState(false);
-  const [deployData, setDeployData] = useState({ name: "", stack: "HTML", github: "", zip: null as any });
+  const [deployData, setDeployData] = useState<{ name: string; stack: string; github: string; files: File[] }>({ name: "", stack: "HTML", github: "", files: [] });
   const [selectedPlan, setSelectedPlan] = useState<any>(null);
   const [payCoin, setPayCoin] = useState("USDT");
   const [txid, setTxid] = useState("");
@@ -58,12 +58,12 @@ export default function DashboardPage() {
 
   const handleDeploy = async () => {
     if (!deployData.name.trim()) { toast("Project name required", "error"); return; }
-    if (!deployData.zip) { toast("File upload karo (.py / .js / .zip) — warna host nahi hoga", "error"); return; }
+    if (!deployData.files.length) { toast("File upload karo (.py / .js / .html / .zip) — warna host nahi hoga", "error"); return; }
     setDeploying(true);
     setDeployProgress("File padh rahe hain...");
     let src: UploadedSource;
     try {
-      src = await readUpload(deployData.zip);
+      src = await readUpload(deployData.files);
     } catch (e) {
       setDeploying(false);
       toast("File read nahi hui — .zip corrupt ho sakta hai", "error");
@@ -86,15 +86,16 @@ export default function DashboardPage() {
       ...reportToSiteFields(report),
       entryFile: report.entryFile,
       src: src.files.map(f => ({ name: f.name, content: f.content.slice(0, 4000) })),
+      bundle: report.bundle,
     };
     setWebsites([...websites, site]);
     setDeploying(false);
     setDeployProgress("");
     setShowDeploy(false);
-    setDeployData({ name: "", stack: "HTML", github: "", zip: null });
+    setDeployData({ name: "", stack: "HTML", github: "", files: [] });
     setReportSite(site);
     setLastReport(report);
-    if (report.ok) toast(report.botUsername ? `Bot @${report.botUsername} verified — live hai ✅` : "Deploy verified — site live hai ✅", "success");
+    if (report.ok) toast(report.botUsername ? `Bot @${report.botUsername} verified — live hai ✅` : `Site live: /site/${site.name.toLowerCase().replace(/\s+/g, "-")} ✅`, "success");
     else toast(`${report.errors.length} blocking error — bot online nahi hoga`, "error");
   };
 
@@ -109,8 +110,9 @@ export default function DashboardPage() {
     } else if (action === "restart") {
       toast("Restarting... done!", "success");
     } else if (action === "open") {
-      toast(`Opening https://${site.url}`, "info");
-      window.open(`https://${site.url}`, "_blank");
+      const route = `/site/${encodeURIComponent(site.name.toLowerCase().replace(/\s+/g, "-"))}`;
+      toast(`Opening ${site.url}`, "info");
+      window.open(route, "_blank");
     }
   };
 
@@ -528,11 +530,25 @@ export default function DashboardPage() {
               </div>
               <div>
                 <label className="text-xs text-[#888]">Or Upload ZIP</label>
-                <input type="file" accept=".zip,.py,.js,.ts,.html,.json,.txt" onChange={e => setDeployData({ ...deployData, zip: e.target.files?.[0] })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-white file:text-black file:text-xs" />
-                {deployData.zip?.name && (
-                  <p className="text-[11px] text-[#00D4FF] mt-1">Detected: {detectFromFileName(deployData.zip.name).fileType} • {(deployData.zip.size / 1024 / 1024).toFixed(2)} MB</p>
+                <input
+                  type="file"
+                  multiple
+                  accept=".zip,.py,.js,.mjs,.ts,.html,.htm,.css,.json,.txt,.env,.md,.yml,.yaml,.svg,.png,.jpg,.jpeg,.webp,.ico"
+                  onChange={e => setDeployData({ ...deployData, files: Array.from(e.target.files || []) })}
+                  className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-white file:text-black file:text-xs"
+                />
+                {deployData.files.length > 0 && (
+                  <div className="mt-2 rounded-xl bg-black border border-[#222] p-2 space-y-1">
+                    {deployData.files.map((f, i) => (
+                      <div key={i} className="flex items-center justify-between text-[11px] px-1">
+                        <span className="text-[#00D4FF] truncate">{f.name}</span>
+                        <span className="text-[#666] shrink-0 ml-2">{(f.size / 1024).toFixed(1)} KB</span>
+                      </div>
+                    ))}
+                    <p className="text-[11px] text-[#00ff88] px-1 pt-1">Detected: {detectFromFileName(deployData.files[0].name).fileType} • total {(deployData.files.reduce((n, f) => n + f.size, 0) / 1024 / 1024).toFixed(2)} MB</p>
+                  </div>
                 )}
-                <p className="text-[10px] text-[#666] mt-1">Zaroori: .py (bot), .js (bot), .zip (poora project) — deploy se pehle code aur bot token asli me verify hota hai</p>
+                <p className="text-[10px] text-[#666] mt-1">ZIP ki zarurat nahi — seedha <span className="text-white">.py / .js / .html</span> bhi upload kar sakte ho. Ek saath multiple files bhi select karo (index.html + style.css + script.js). ZIP bhi chalta hai.</p>
               </div>
               <div className="flex gap-3">
                 <button onClick={() => setShowDeploy(false)} className="flex-1 py-3 rounded-full bg-black border border-[#222] text-sm">Cancel</button>
@@ -602,6 +618,9 @@ export default function DashboardPage() {
               </button>
               <button onClick={() => { setErrorSite(reportSite); setReportSite(null); }} className="flex-1 min-w-[140px] py-3 rounded-full bg-[#222] border border-[#333] text-sm">Full Details</button>
               <button onClick={() => { setLogsSite(reportSite); setReportSite(null); }} className="flex-1 min-w-[120px] py-3 rounded-full bg-[#00D4FF]/10 border border-[#00D4FF]/20 text-[#00D4FF] text-sm">Logs</button>
+              {lastReport.ok && (
+                <a href={`/site/${encodeURIComponent(reportSite.name.toLowerCase().replace(/\s+/g, "-"))}`} target="_blank" className="py-3 px-5 rounded-full bg-[#00ff88] text-black text-sm font-medium text-center">Open Site →</a>
+              )}
               {!lastReport.ok && (
                 <button onClick={() => { if (confirm("Delete this failed deploy?")) { setWebsites(websites.filter(x => x.id !== reportSite.id)); setReportSite(null); setLastReport(null); toast("Deleted", "info"); } }} className="py-3 px-5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-sm">Delete</button>
               )}

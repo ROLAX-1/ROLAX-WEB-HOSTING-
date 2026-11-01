@@ -29,6 +29,7 @@ export type DeployReport = {
   entryFile?: string;
   fixedSource?: string;      // agar auto-transform hua
   generatedFiles?: { name: string; content: string }[];
+  bundle?: { path: string; content: string; type: string }[];
   startedAt: string;
   finishedAt: string;
 };
@@ -44,9 +45,15 @@ const MAX_TEXT = 200_000; // per file read cap
 
 /* ----------------------------- file reading ----------------------------- */
 
-export async function readUpload(file: File | null, extraFiles?: FileList | null): Promise<UploadedSource> {
+export async function readUpload(
+  input: File | File[] | FileList | null,
+  extraFiles?: FileList | null
+): Promise<UploadedSource> {
   const list: File[] = [];
-  if (file) list.push(file);
+  if (input) {
+    if (typeof File !== "undefined" && input instanceof File) list.push(input);
+    else Array.from(input as ArrayLike<File>).forEach(f => list.push(f));
+  }
   if (extraFiles) Array.from(extraFiles).forEach(f => list.push(f));
   if (!list.length) return { files: [], binaryCount: 0, totalBytes: 0 };
 
@@ -61,20 +68,41 @@ export async function readUpload(file: File | null, extraFiles?: FileList | null
       const entries = Object.values(zip.files).filter(e => !e.dir);
       for (const entry of entries.slice(0, 200)) {
         const name = entry.name.replace(/^.*\//, "");
-        const isText = /\.(py|js|ts|json|txt|md|html|css|env|yml|yaml|toml|cfg|ini|sh)$/i.test(entry.name) || /(^|\/)\.env/.test(entry.name) || /(^|\/)Dockerfile$/.test(entry.name) || /requirements/i.test(entry.name);
+        const isText = /\.(py|js|mjs|cjs|ts|jsx|tsx|json|txt|md|html|htm|css|scss|svg|xml|env|yml|yaml|toml|cfg|ini|sh|bat|procfile)$/i.test(entry.name) || /(^|\/)\.env/.test(entry.name) || /(^|\/)Dockerfile$/.test(entry.name) || /requirements/i.test(entry.name);
         if (!isText) { binaryCount++; continue; }
         const content = await entry.async("string");
         out.push({ name: entry.name.includes("/") ? name : entry.name, content: content.slice(0, MAX_TEXT) });
       }
       continue;
     }
-    const isText = /\.(py|js|ts|json|txt|md|html|css|env|yml|yaml|toml|cfg|ini|sh)$/i.test(f.name) || /(^|\/)\.env/.test(f.name);
+    const isText = /\.(py|js|mjs|cjs|ts|jsx|tsx|json|txt|md|html|htm|css|scss|svg|xml|env|yml|yaml|toml|cfg|ini|sh|bat|procfile)$/i.test(f.name) || /(^|\/)\.env/.test(f.name);
     if (!isText) { binaryCount++; continue; }
     const content = (await f.text()).slice(0, MAX_TEXT);
     out.push({ name: f.name, content });
   }
 
   return { files: out, binaryCount, totalBytes, zipName: list.find(f => f.name.toLowerCase().endsWith(".zip"))?.name };
+}
+
+const STATIC_EXT = /\.(html?|css|js|mjs|svg|png|jpe?g|gif|webp|ico|txt|json|woff2?|ttf|mp4|xml)$/i;
+
+/** Static site ke liye asli files (hosting pe serve karne ke liye) */
+export function staticBundle(src: UploadedSource): { path: string; content: string; type: string }[] {
+  const out: { path: string; content: string; type: string }[] = [];
+  for (const f of src.files) {
+    const path = f.name.replace(/^\.?\//, "");
+    if (!STATIC_EXT.test(path)) continue;
+    const ext = (path.split(".").pop() || "").toLowerCase();
+    const type = ext === "html" || ext === "htm" ? "text/html"
+      : ext === "css" ? "text/css"
+      : ext === "js" || ext === "mjs" ? "text/javascript"
+      : ext === "json" ? "application/json"
+      : ext === "svg" ? "image/svg+xml"
+      : ext === "txt" ? "text/plain"
+      : "text/plain";
+    out.push({ path, content: f.content, type });
+  }
+  return out;
 }
 
 export function findFile(src: UploadedSource, re: RegExp) {
@@ -301,19 +329,37 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
     }
   }
 
-  // 10. static site
+  // 10. static site -> REAL hosting checks
   if (det.kind === "static") {
-    const html = src.files.find(f => f.name.endsWith(".html"));
+    const html = src.files.find(f => /\.html?$/i.test(f.name));
     if (html && /<html|<!doctype html/i.test(html.content)) {
-      push({ code: "HTML_OK", title: "HTML structure valid", detail: `${html.name} serve ho sakta hai`, level: "ok", fixable: false });
+      push({ code: "HTML_OK", title: "HTML structure valid", detail: `${html.name} live serve hoga (${html.content.length} bytes)`, level: "ok", fixable: false });
+    } else if (html) {
+      push({ code: "HTML_PARTIAL", title: "HTML file me <html> tag nahi mila", detail: "Browser me khulega par structure adhura hai — <!DOCTYPE html> add karo", level: "warn", fixable: false });
+    }
+    const hasIndex = src.files.some(f => /(^|\/)index\.html?$/i.test(f.name));
+    if (!hasIndex && html) {
+      push({ code: "NO_INDEX", title: "index.html nahi hai", detail: `Home page ke liye file ka naam index.html rakho (abhi: ${html.name})`, level: "warn", fixable: true });
+    }
+    // broken local links
+    const localRefs = Array.from(html?.content.matchAll(/(?:href|src)=["'](?!#|https?:|mailto:|tel:|\/\/)([^"']+)["']/gi) || []).map(m => m[1].replace(/^\.?\//, ""));
+    const names = src.files.map(f => f.name.replace(/^\.?\//, ""));
+    const missing = Array.from(new Set(localRefs)).filter(r => !names.some(n => n === r || n.endsWith("/" + r)) && !r.startsWith("data:"));
+    if (missing.length) {
+      push({ code: "MISSING_ASSETS", title: `${missing.length} file(s) missing hain`, detail: `HTML in files ko dhoond raha hai par upload me nahi: ${missing.slice(0, 4).join(", ")}`, level: "warn", fixable: false });
+    } else if (localRefs.length) {
+      push({ code: "ASSETS_OK", title: "Saari local assets mil gayi", detail: `${localRefs.length} link(s) verify hue`, level: "ok", fixable: false });
     }
   }
 
   const errors = checks.filter(c => c.level === "error");
   const warnings = checks.filter(c => c.level === "warn");
 
+  const bundle = det.kind === "static" ? staticBundle(src) : undefined;
+
   return {
     ok: errors.length === 0 && src.files.length > 0,
+    bundle,
     botType: det.botType,
     fileType: det.fileType,
     stack: det.stack,
@@ -342,6 +388,10 @@ export async function autoFixAndVerify(src: UploadedSource, report: DeployReport
     if (c.code === "INDENT_MIX") {
       files.forEach(f => { if (f.name.endsWith(".py")) { f.content = f.content.split("\n").map(l => l.replace(/^\t+/, m => "    ".repeat(m.length))).join("\n"); } });
       applied.push("Tabs → 4 spaces (Python indentation fix)");
+    }
+    if (c.code === "NO_INDEX") {
+      const htmlIdx = files.findIndex(f => /\.html?$/i.test(f.name));
+      if (htmlIdx >= 0) { files[htmlIdx] = { ...files[htmlIdx], name: "index.html" }; applied.push("Home page → index.html"); }
     }
     if (c.code === "HARDCODED_PORT") {
       files.forEach(f => {
