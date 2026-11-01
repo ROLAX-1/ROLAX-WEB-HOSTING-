@@ -6,6 +6,7 @@ import { useStore, ADMIN_EMAIL } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { analyzeSite, autoFixSite, needsManualAction, MAX_ERRORS } from "@/lib/hosting";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -24,6 +25,42 @@ export default function AdminPage() {
   if (!hydrated || !auth) return <div className="min-h-screen bg-black flex items-center justify-center text-[#888]">Loading admin...</div>;
 
   const revenue = payments.filter(p => p.status === "approved").reduce((sum, p) => sum + p.amount, 0);
+
+  const defaultPlansReset = () => ([
+    { id: "plan_free", name: "Starter", price: 0, ram: "512 MB", cpu: "0.5 vCPU", storage: "2 GB", bandwidth: "10 GB", features: ["1 Website", "512 MB RAM", "Community Support", "Free SSL"] },
+    { id: "plan_pro", name: "Pro Hosting", price: 4.99, ram: "2 GB", cpu: "2 vCPU", storage: "20 GB", bandwidth: "100 GB", features: ["10 Websites", "2 GB RAM", "Priority Support", "Free SSL", "Daily Backups", "Custom Domain"], popular: true },
+    { id: "plan_enterprise", name: "Enterprise", price: 14.99, ram: "8 GB", cpu: "4 vCPU", storage: "100 GB", bandwidth: "Unlimited", features: ["Unlimited Websites", "8 GB RAM", "24/7 Support", "Free SSL", "Hourly Backups", "DDoS Protection", "Dedicated IP"] },
+  ] as any[]);
+
+  // ---- Hosting error center ----
+  const allErrors = websites.flatMap(w => analyzeSite(w).map(e => ({ site: w, error: e })));
+  const brokenSites = websites.filter(w => w.status === "Error" || (w.errorCount || 0) > 0);
+  const criticalSites = websites.filter(w => needsManualAction(w));
+
+  const fixOneSite = (site: any) => {
+    const fixed = autoFixSite(site);
+    setWebsites(websites.map(x => (x.id === site.id ? fixed : x)));
+    if (fixed.status === "Running") {
+      toast(`Auto-fix successful: ${site.name} ab live hai ✅`, "success");
+    } else {
+      toast(`${site.name}: kuch errors manual fix chahiye (BOT_TOKEN / syntax)`, "error");
+    }
+  };
+
+  const fixAllSites = () => {
+    let fixedCount = 0;
+    let still = 0;
+    const next = websites.map(w => {
+      if (w.status === "Error" || (w.errorCount || 0) > 0) {
+        const fixed = autoFixSite(w);
+        if (fixed.status === "Running") fixedCount++; else still++;
+        return fixed;
+      }
+      return w;
+    });
+    setWebsites(next);
+    toast(`Auto-fix complete: ${fixedCount} fixed, ${still} need manual help`, still ? "error" : "success");
+  };
   const pendingCount = payments.filter(p => p.status === "pending").length;
 
   const chartData = [
@@ -56,6 +93,7 @@ export default function AdminPage() {
             { id: "stacks", label: "Stack Manager", icon: "⚙️" },
             { id: "wallets", label: "Crypto Wallets", icon: "₿" },
             { id: "payments", label: "Payments", icon: "💰", badge: pendingCount },
+            { id: "hosting", label: "Hosting Errors", icon: "🚨", badge: brokenSites.length },
             { id: "users", label: "User Manager", icon: "👥" },
             { id: "websites", label: "Website Manager", icon: "🌐" },
             { id: "tickets", label: "Ticket Manager", icon: "🎫" },
@@ -84,7 +122,7 @@ export default function AdminPage() {
           <button onClick={() => { clearAuth(); router.push("/"); }} className="px-3 py-1 rounded-full bg-[#111] border border-[#222] text-xs">Logout</button>
         </div>
         <div className="md:hidden flex gap-2 p-3 overflow-x-auto border-b border-[#222] bg-black sticky top-[49px] z-30">
-          {["overview", "customizer", "plans", "stacks", "wallets", "payments", "users", "websites", "tickets"].map(id => (
+          {["overview", "customizer", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
             <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-full text-xs whitespace-nowrap ${tab === id ? "bg-white text-black" : "bg-[#111] border border-[#222] text-[#888]"}`}>{id}</button>
           ))}
         </div>
@@ -159,6 +197,97 @@ export default function AdminPage() {
             </div>
           )}
 
+          {tab === "hosting" && (
+            <div className="space-y-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-grotesk text-xl font-bold">Hosting Errors Center 🚨</h2>
+                  <p className="text-xs text-[#888] mt-1">Yahan har hosted file ka error dikhega. Auto-fix ek click me, zyada error ho to delete alert.</p>
+                </div>
+                <button onClick={fixAllSites} className="px-5 py-2 rounded-full bg-gradient-to-r from-[#6C5CE7] to-[#00D4FF] text-white text-sm font-medium">⚡ Auto-Fix All</button>
+              </div>
+
+              {criticalSites.length > 0 && (
+                <div className="rounded-2xl bg-red-500/10 border border-red-500/30 p-4">
+                  <p className="text-sm font-semibold text-red-300">🚨 {criticalSites.length} file(s) me {MAX_ERRORS}+ errors hain</p>
+                  <p className="text-xs text-red-200/70 mt-1">Ye files auto-fix se theek nahi hongi — inko delete karke dobara upload karo.</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {criticalSites.map(w => (
+                      <button key={w.id} onClick={() => {
+                        if (confirm(`${w.name} delete karein? (${w.errorCount} errors)`)) {
+                          setWebsites(websites.filter(x => x.id !== w.id));
+                          toast("Deleted: " + w.name, "info");
+                        }
+                      }} className="px-3 py-1.5 rounded-full bg-red-500 text-white text-xs">Delete {w.name}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid md:grid-cols-3 gap-3">
+                <div className="rounded-xl bg-[#00ff88]/5 border border-[#00ff88]/20 p-4">
+                  <p className="text-xs text-[#888]">Healthy</p>
+                  <p className="text-2xl font-bold text-[#00ff88]">{websites.filter(w => w.status === "Running" && !(w.errorCount || 0)).length}</p>
+                </div>
+                <div className="rounded-xl bg-yellow-500/5 border border-yellow-500/20 p-4">
+                  <p className="text-xs text-[#888]">Errors (auto-fix possible)</p>
+                  <p className="text-2xl font-bold text-yellow-400">{brokenSites.length}</p>
+                </div>
+                <div className="rounded-xl bg-red-500/5 border border-red-500/20 p-4">
+                  <p className="text-xs text-[#888]">Critical (delete needed)</p>
+                  <p className="text-2xl font-bold text-red-400">{criticalSites.length}</p>
+                </div>
+              </div>
+
+              {brokenSites.length === 0 ? (
+                <div className="rounded-2xl bg-[#111] border border-[#222] p-10 text-center">
+                  <p className="text-3xl">✅</p>
+                  <p className="text-sm text-[#888] mt-2">Sab hosting healthy hai — koi error nahi mila.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {brokenSites.map(w => {
+                    const errs = analyzeSite(w);
+                    const critical = needsManualAction(w);
+                    return (
+                      <div key={w.id} className={`rounded-2xl bg-[#111] border p-5 ${critical ? "border-red-500/40" : "border-yellow-500/30"}`}>
+                        <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-sm">{w.name} <span className="text-xs text-[#666]">({w.stack})</span></p>
+                            <p className="text-xs text-[#00D4FF]">{w.url}</p>
+                            <p className="text-[11px] text-[#666] mt-1">{w.botType || w.fileType || "—"} • User: {users.find(u => u.id === w.userId)?.email || w.userId}</p>
+                          </div>
+                          <div className="flex gap-2 shrink-0">
+                            <button onClick={() => fixOneSite(w)} className="px-4 py-2 rounded-full bg-white text-black text-xs font-medium">{critical ? "Try Fix" : "Auto-Fix"}</button>
+                            <button onClick={() => {
+                              if (confirm("Delete this hosted file?")) {
+                                setWebsites(websites.filter(x => x.id !== w.id));
+                                toast("Deleted: " + w.name, "info");
+                              }
+                            }} className="px-4 py-2 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 text-xs">Delete</button>
+                          </div>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {(errs.length ? errs : [{ code: "UNKNOWN", title: w.lastError || "Unknown error", detail: "Logs check karo", fix: "Re-deploy karke dekho", canAutoFix: false }]).map((e, i) => (
+                            <div key={i} className="rounded-xl bg-black border border-[#222] p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-xs font-medium text-red-300">❌ {e.title}</p>
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full ${e.canAutoFix ? "bg-yellow-500/10 text-yellow-400" : "bg-red-500/10 text-red-400"}`}>{e.canAutoFix ? "auto-fix possible" : "manual fix"}</span>
+                              </div>
+                              <p className="text-[11px] text-[#888] mt-1">{e.detail}</p>
+                              <p className="text-[11px] text-[#00ff88] mt-1">💡 {e.fix}</p>
+                            </div>
+                          ))}
+                        </div>
+                        {w.lastFixAt && <p className="text-[10px] text-[#666] mt-2">Last auto-fix attempt: {new Date(w.lastFixAt).toLocaleString()}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {tab === "customizer" && (
             <div className="space-y-6 max-w-3xl">
               <h2 className="font-grotesk text-xl font-bold">Site Customizer</h2>
@@ -180,6 +309,12 @@ export default function AdminPage() {
                   <input value={(settings as any)[field.key]} onChange={e => setSettings({ ...settings, [field.key]: e.target.value })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm" />
                 </div>
               ))}
+
+              <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
+                <label className="text-xs text-[#888]">USD → INR Rate (pricing me ₹ dikhane ke liye)</label>
+                <input type="number" value={settings.usdToInr || 88} onChange={e => setSettings({ ...settings, usdToInr: parseFloat(e.target.value) || 88 })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm" />
+                <p className="text-[11px] text-[#666] mt-1">Example: plan $4.99 → ₹{Math.round(4.99 * (settings.usdToInr || 88))}</p>
+              </div>
 
               <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
                 <label className="text-xs text-[#888]">Why Us Points (one per line)</label>
@@ -221,8 +356,11 @@ export default function AdminPage() {
 
           {tab === "plans" && (
             <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="font-grotesk text-xl font-bold">Plan Manager</h2>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-grotesk text-xl font-bold">Plan Manager</h2>
+                  <p className="text-xs text-[#888] mt-1">Price, RAM, CPU — sab kuch apne hisaab se edit karo. Plan delete bhi kar sakte ho.</p>
+                </div>
                 <button onClick={() => {
                   const newPlan = { id: "plan_" + Date.now(), name: "New Plan", price: 9.99, ram: "4 GB", cpu: "2 vCPU", storage: "50 GB", bandwidth: "200 GB", features: ["Feature 1", "Feature 2"] };
                   setPlans([...plans, newPlan]);
@@ -230,24 +368,76 @@ export default function AdminPage() {
                 }} className="px-4 py-2 rounded-full bg-white text-black text-sm font-medium">+ Add Plan</button>
               </div>
 
+              {plans.length === 0 && (
+                <div className="rounded-2xl bg-[#111] border border-dashed border-[#333] p-8 text-center">
+                  <p className="text-sm text-[#888]">Koi plan nahi hai. + Add Plan se naya banao.</p>
+                </div>
+              )}
+
               <div className="grid md:grid-cols-2 gap-4">
                 {plans.map((plan, idx) => (
                   <div key={plan.id} className="rounded-2xl bg-[#111] border border-[#222] p-5 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <input value={plan.name} onChange={e => { const arr = [...plans]; arr[idx].name = e.target.value; setPlans(arr); }} className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-semibold" />
-                      <button onClick={() => { setPlans(plans.filter(p => p.id !== plan.id)); toast("Deleted", "info"); }} className="ml-2 px-3 py-2 rounded-xl bg-red-500/10 text-red-400 text-xs">Delete</button>
+                    <div className="flex items-center gap-2">
+                      <input value={plan.name} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], name: e.target.value }; setPlans(arr); }} className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-semibold" placeholder="Plan name" />
+                      <button onClick={() => {
+                        if (confirm(`Delete plan "${plan.name}"? Users ka data safe rahega.`)) {
+                          setPlans(plans.filter(p => p.id !== plan.id));
+                          toast("Plan deleted: " + plan.name, "info");
+                        }
+                      }} className="px-3 py-2 rounded-xl bg-red-500/10 text-red-400 text-xs border border-red-500/20 shrink-0">Delete</button>
                     </div>
+
                     <div className="grid grid-cols-2 gap-2">
-                      <div><label className="text-[10px] text-[#888]">Price ($)</label><input type="number" value={plan.price} onChange={e => { const arr = [...plans]; arr[idx].price = parseFloat(e.target.value) || 0; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" /></div>
-                      <div><label className="text-[10px] text-[#888]">RAM</label><input value={plan.ram} onChange={e => { const arr = [...plans]; arr[idx].ram = e.target.value; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" /></div>
-                      <div><label className="text-[10px] text-[#888]">CPU</label><input value={plan.cpu} onChange={e => { const arr = [...plans]; arr[idx].cpu = e.target.value; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" /></div>
-                      <div><label className="text-[10px] text-[#888]">Storage</label><input value={plan.storage} onChange={e => { const arr = [...plans]; arr[idx].storage = e.target.value; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" /></div>
+                      <div>
+                        <label className="text-[10px] text-[#888]">Price in $ (0 = Free)</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={String(plan.price)}
+                          onChange={e => {
+                            const raw = e.target.value;
+                            const parsed = raw === "" ? 0 : parseFloat(raw);
+                            const arr = [...plans];
+                            arr[idx] = { ...arr[idx], price: isFinite(parsed) ? Math.max(0, parsed) : 0 };
+                            setPlans(arr);
+                          }}
+                          className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm"
+                          placeholder="4.99"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-[#888]">RAM</label>
+                        <input value={plan.ram} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], ram: e.target.value }; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-[#888]">CPU</label>
+                        <input value={plan.cpu} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], cpu: e.target.value }; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-[#888]">Storage</label>
+                        <input value={plan.storage} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], storage: e.target.value }; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="text-[10px] text-[#888]">Bandwidth</label>
+                        <input value={plan.bandwidth} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], bandwidth: e.target.value }; setPlans(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                      </div>
                     </div>
+
                     <div>
                       <label className="text-[10px] text-[#888]">Features (one per line)</label>
-                      <textarea value={plan.features.join("\n")} onChange={e => { const arr = [...plans]; arr[idx].features = e.target.value.split("\n").filter(Boolean); setPlans(arr); }} rows={4} className="w-full mt-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                      <textarea value={plan.features.join("\n")} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], features: e.target.value.split("\n") }; setPlans(arr); }} onBlur={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], features: e.target.value.split("\n").map(f => f.trim()).filter(Boolean) }; setPlans(arr); }} rows={4} className="w-full mt-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
                     </div>
-                    <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!plan.popular} onChange={e => { const arr = [...plans]; arr[idx].popular = e.target.checked; setPlans(arr); }} /> Popular Badge</label>
+
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!plan.popular} onChange={e => { const arr = [...plans]; arr[idx] = { ...arr[idx], popular: e.target.checked }; setPlans(arr); }} /> Popular Badge</label>
+                      <span className="text-[10px] text-[#666]">ID: {plan.id}</span>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button onClick={() => { const arr = [...plans]; arr[idx] = { ...arr[idx], price: 0 }; setPlans(arr); toast("Marked as Free plan", "success"); }} className="flex-1 py-2 rounded-full bg-[#222] text-xs">Make Free ($0)</button>
+                      <button onClick={() => { const copy = { ...plan, id: "plan_" + Date.now(), name: plan.name + " Copy" }; setPlans([...plans, copy]); toast("Plan duplicated", "success"); }} className="flex-1 py-2 rounded-full bg-[#222] text-xs">Duplicate</button>
+                      <button onClick={() => { setPlans(defaultPlansReset()); toast("Plans reset to default", "info"); }} className="flex-1 py-2 rounded-full bg-red-500/10 text-red-400 text-xs border border-red-500/20">Reset All</button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -385,9 +575,14 @@ export default function AdminPage() {
 
           {tab === "websites" && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <h2 className="font-grotesk text-xl font-bold">Website Manager (All Users)</h2>
-                <span className="text-xs px-3 py-1 rounded-full bg-[#111] border border-[#222] text-[#888]">{websites.length} hosted files</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs px-3 py-1 rounded-full bg-[#111] border border-[#222] text-[#888]">{websites.length} hosted files</span>
+                  {brokenSites.length > 0 && (
+                    <button onClick={() => setTab("hosting")} className="text-xs px-3 py-1 rounded-full bg-red-500/15 border border-red-500/30 text-red-300 animate-pulse">🚨 {brokenSites.length} file(s) with errors — open Error Center</button>
+                  )}
+                </div>
               </div>
               
               {/* Deployed Status Overview */}
@@ -428,8 +623,14 @@ export default function AdminPage() {
                         </td>
                         <td className="px-3 py-3">
                           <div className="text-xs">
-                            <p className="text-white">{(w as any).fileType || w.stack + " File"}</p>
-                            <p className="text-[10px] text-[#666]">Deployed: {(w as any).errorCount || 0} errors</p>
+                            <p className="text-white">{w.fileType || w.stack + " File"}</p>
+                            {analyzeSite(w).length > 0 ? (
+                              <p className={`text-[10px] ${needsManualAction(w) ? "text-red-400" : "text-yellow-400"}`}>
+                                ⚠ {w.errorCount || 0} error(s) {needsManualAction(w) ? "— delete karo" : "— auto-fix ready"}
+                              </p>
+                            ) : (
+                              <p className="text-[10px] text-[#00ff88]">✓ 0 errors</p>
+                            )}
                           </div>
                         </td>
                         <td className="px-3 py-3">
@@ -441,23 +642,22 @@ export default function AdminPage() {
                         <td className="px-3 py-3">
                           <div className="flex gap-1 flex-wrap">
                             <button onClick={() => {
-                              // Auto-fix logic: if errorCount < 5, fix it, else delete
-                              if (w.status === "Error") {
-                                const errCount = (w as any).errorCount || 0;
-                                if (errCount >= 5) {
-                                  if (confirm(`Too many errors (${errCount}) - Delete this hosted file?`)) {
+                              if (w.status === "Error" || (w.errorCount || 0) > 0) {
+                                if (needsManualAction(w)) {
+                                  if (confirm(`Ye file ${MAX_ERRORS}+ errors de rahi hai — auto-fix possible nahi. Delete karein?`)) {
                                     setWebsites(websites.filter(x => x.id !== w.id));
                                     toast("Deleted due to excessive errors", "info");
+                                  } else {
+                                    toast("Telegram @Rolax112 pe contact karo manual fix ke liye", "info");
                                   }
                                 } else {
-                                  setWebsites(websites.map(x => x.id === w.id ? { ...x, status: "Running" as const, errorCount: 0, lastError: undefined } : x));
-                                  toast("Auto-fixed errors! File redeployed.", "success");
+                                  fixOneSite(w);
                                 }
                               } else {
                                 setWebsites(websites.map(x => x.id === w.id ? { ...x, status: x.status === "Running" ? "Stopped" as const : "Running" as const } : x));
                                 toast("Status toggled", "success");
                               }
-                            }} className="px-2 py-1 rounded-full bg-[#222] text-xs">{w.status === "Error" ? "Fix" : w.status === "Running" ? "Stop" : "Start"}</button>
+                            }} className={`px-2 py-1 rounded-full text-xs ${w.status === "Error" ? "bg-yellow-500/15 text-yellow-400 border border-yellow-500/30" : "bg-[#222]"}`}>{w.status === "Error" ? "⚡ Auto-Fix" : w.status === "Running" ? "Stop" : "Start"}</button>
                             <button onClick={() => {
                               // Download hosted file simulation
                               const blob = new Blob([`// Hosted file: ${w.name}\n// Stack: ${w.stack}\n// Type: ${(w as any).botType || (w as any).fileType}\n// Downloaded from ROLAX HOST\nconsole.log("Hello from ${w.name}");`], {type: "text/plain"});

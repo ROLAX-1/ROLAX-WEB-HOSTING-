@@ -53,6 +53,7 @@ export type Website = {
   botType?: string;
   errorCount?: number;
   lastError?: string;
+  lastFixAt?: string;
   deployedAt?: string;
   fileSize?: string;
   createdAt: string;
@@ -98,6 +99,7 @@ export type SiteSettings = {
   footerText: string;
   contactTelegram: string;
   contactNote: string;
+  usdToInr: number;
 };
 
 const defaultPlans: Plan[] = [
@@ -172,6 +174,7 @@ const defaultSettings: SiteSettings = {
   footerText: "© 2025 ROLAX HOST. Premium hosting for modern developers.",
   contactTelegram: "https://t.me/Rolax112",
   contactNote: "Contact only on Telegram - No other support",
+  usdToInr: 88,
 };
 
 // Helper to load from localStorage
@@ -184,6 +187,76 @@ function load<T>(key: string, fallback: T): T {
 }
 function save(key: string, val: any) {
   if (typeof window !== "undefined") localStorage.setItem(key, JSON.stringify(val));
+}
+
+// ---- Sanity sanitizers: purane/kharab localStorage data auto-repair ----
+function num(v: any): number {
+  if (typeof v === "number" && isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = parseFloat(v.replace(/[^0-9.\-]/g, ""));
+    return isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+function sanitizePlans(input: any): Plan[] {
+  const arr = Array.isArray(input) ? input : [];
+  const clean = arr
+    .filter((p: any) => p && typeof p === "object")
+    .map((p: any, i: number) => {
+      const features = Array.isArray(p.features) ? p.features.map((f: any) => String(f)).filter(Boolean) : [];
+      return {
+        id: String(p.id || "plan_" + i + "_" + Date.now()),
+        name: String(p.name || "Unnamed Plan"),
+        price: Math.max(0, num(p.price)),
+        ram: String(p.ram || "-"),
+        cpu: String(p.cpu || "-"),
+        storage: String(p.storage || "-"),
+        bandwidth: String(p.bandwidth || "-"),
+        features: features.length ? features : ["Basic Support"],
+        popular: !!p.popular,
+        color: p.color ? String(p.color) : undefined,
+      } as Plan;
+    });
+  return clean.length ? clean : defaultPlans;
+}
+
+function sanitizeWallets(input: any): CryptoWallet[] {
+  const arr = Array.isArray(input) ? input : [];
+  const clean = arr
+    .filter((w: any) => w && typeof w === "object")
+    .map((w: any, i: number) => ({
+      id: String(w.id || "w_" + i),
+      name: String(w.name || w.symbol || "Coin"),
+      symbol: String(w.symbol || w.name || "COIN").toUpperCase(),
+      address: String(w.address || ""),
+      network: String(w.network || "BNB Smart Chain (BEP-20)"),
+    }));
+  return clean;
+}
+
+function sanitizeWebsites(input: any): Website[] {
+  const arr = Array.isArray(input) ? input : [];
+  return arr
+    .filter((w: any) => w && typeof w === "object" && w.id)
+    .map((w: any) => ({
+      id: String(w.id),
+      userId: String(w.userId || "u1"),
+      name: String(w.name || "untitled"),
+      url: String(w.url || (String(w.name || "site").toLowerCase().replace(/\s+/g, "-") + ".rolax.host")),
+      stack: String(w.stack || "HTML"),
+      status: w.status === "Error" || w.status === "Stopped" ? w.status : "Running",
+      cpu: num(w.cpu),
+      ram: num(w.ram),
+      fileType: w.fileType ? String(w.fileType) : undefined,
+      botType: w.botType ? String(w.botType) : undefined,
+      errorCount: Math.max(0, Math.floor(num(w.errorCount))),
+      lastError: w.lastError ? String(w.lastError) : undefined,
+      lastFixAt: w.lastFixAt ? String(w.lastFixAt) : undefined,
+      deployedAt: w.deployedAt ? String(w.deployedAt) : undefined,
+      fileSize: w.fileSize ? String(w.fileSize) : undefined,
+      createdAt: String(w.createdAt || new Date().toISOString()),
+    })) as Website[];
 }
 
 type Store = {
@@ -229,11 +302,16 @@ export const useStore = create<Store>((set, get) => ({
 
   hydrate: () => {
     if (get().hydrated) return;
-    const plans = load<Plan[]>("rolax_plans", defaultPlans);
+    const plans = sanitizePlans(load<any>("rolax_plans", defaultPlans));
     const stacks = load<Stack[]>("rolax_stacks", defaultStacks);
-    const wallets = load<CryptoWallet[]>("rolax_wallets", defaultWallets);
-    const settings = load<SiteSettings>("rolax_settings", defaultSettings);
-    const websites = load<Website[]>("rolax_websites", []);
+    const wallets = sanitizeWallets(load<any>("rolax_wallets", defaultWallets));
+    const rawSettings = load<any>("rolax_settings", defaultSettings);
+    const settings: SiteSettings = {
+      ...defaultSettings,
+      ...(rawSettings || {}),
+      usdToInr: num(rawSettings?.usdToInr) || defaultSettings.usdToInr,
+    };
+    const websites = sanitizeWebsites(load<any>("rolax_websites", []));
     const payments = load<Payment[]>("rolax_payments", []);
     const tickets = load<Ticket[]>("rolax_tickets", []);
     const users = load<UserType[]>("rolax_users", []);

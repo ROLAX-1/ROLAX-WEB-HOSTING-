@@ -3,12 +3,13 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useStore, ADMIN_EMAIL } from "@/lib/store";
+import { analyzeSite, autoFixSite, needsManualAction, runDeployChecks, detectFromFileName, MAX_ERRORS } from "@/lib/hosting";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { hydrate, hydrated, plans, stacks, wallets, websites, setWebsites, payments, setPayments, tickets, setTickets, users } = useStore();
+  const { hydrate, hydrated, plans, stacks, wallets, settings, websites, setWebsites, payments, setPayments, tickets, setTickets, users } = useStore();
   const [auth, setAuth] = useState<any>(null);
   const [tab, setTab] = useState("overview");
   const [showDeploy, setShowDeploy] = useState(false);
@@ -20,6 +21,8 @@ export default function DashboardPage() {
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMsg, setTicketMsg] = useState("");
   const [fileManagerSite, setFileManagerSite] = useState<any>(null);
+  const [errorSite, setErrorSite] = useState<any>(null);
+  const [alertSite, setAlertSite] = useState<any>(null);
   const [logsSite, setLogsSite] = useState<any>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
@@ -37,33 +40,42 @@ export default function DashboardPage() {
   const myTickets = tickets.filter(t => t.userId === auth.id);
   const myPlan = plans.find(p => p.id === (users.find(u => u.email === auth.email)?.planId || ""));
   const pendingPayment = myPayments.find(p => p.status === "pending");
+  const rate = settings?.usdToInr || 88;
+  const inr = (usd: number) => Math.round(usd * rate);
+  const priceLabel = (usd: number) => (usd === 0 ? "Free" : `$${usd} / ₹${inr(usd)}`);
 
   const handleDeploy = () => {
     if (!deployData.name.trim()) { toast("Project name required", "error"); return; }
     const url = `${deployData.name.toLowerCase().replace(/\s+/g, "-")}.rolax.host`;
-    // Determine bot/file type based on stack
-    const fileTypeMap: any = { "HTML": "HTML Website", "Node.js": "Node.js Bot", "Python": "Python Bot" };
-    const botTypeMap: any = { "HTML": "Static Site", "Node.js": "Discord/Telegram Bot", "Python": "Telegram Bot" };
-    const newSite: any = {
+    // File type upload se detect karo
+    const det = deployData.zip?.name ? detectFromFileName(deployData.zip.name) : { fileType: deployData.stack + (deployData.stack === "HTML" ? " Website" : " Bot"), botType: deployData.stack === "HTML" ? "Static Site" : "Bot", stack: deployData.stack };
+    let newSite: any = {
       id: "ws_" + Date.now(),
       userId: auth.id,
       name: deployData.name,
       url,
-      stack: deployData.stack,
+      stack: det.stack || deployData.stack,
       status: "Running" as const,
       cpu: Math.floor(Math.random() * 40) + 10,
       ram: Math.floor(Math.random() * 40) + 20,
-      fileType: fileTypeMap[deployData.stack] || deployData.stack + " File",
-      botType: botTypeMap[deployData.stack] || deployData.stack,
+      fileType: det.fileType,
+      botType: det.botType,
       errorCount: 0,
       deployedAt: new Date().toISOString(),
-      fileSize: (Math.random() * 10 + 1).toFixed(1) + " MB",
+      fileSize: deployData.zip?.size ? (deployData.zip.size / 1024 / 1024).toFixed(1) + " MB" : (Math.random() * 10 + 1).toFixed(1) + " MB",
       createdAt: new Date().toISOString()
     };
+    // Deploy ke baad automatic health-check
+    newSite = runDeployChecks(newSite);
     setWebsites([...websites, newSite]);
-    toast("Project deployed successfully! 🚀", "success");
     setShowDeploy(false);
     setDeployData({ name: "", stack: "HTML", github: "", zip: null });
+    if (newSite.status === "Error") {
+      setAlertSite(newSite);
+      toast("Deploy hua par error mila — neeche error details dekho", "error");
+    } else {
+      toast("Deployed successfully! Site live hai 🚀", "success");
+    }
   };
 
   const handleAction = (site: any, action: string) => {
@@ -202,7 +214,8 @@ export default function DashboardPage() {
                 {plans.map(plan => (
                   <div key={plan.id} className={`rounded-2xl p-5 border flex flex-col ${plan.popular ? "bg-black border-[#6C5CE7]/40" : "bg-black border-[#222]"}`}>
                     <h4 className="font-semibold">{plan.name}</h4>
-                    <p className="text-xl font-bold mt-1">${plan.price}<span className="text-xs text-[#888] font-normal">/mo</span></p>
+                    <p className="text-xl font-bold mt-1">{plan.price === 0 ? "Free" : `$${plan.price}`}<span className="text-xs text-[#888] font-normal">{plan.price === 0 ? "" : " /mo"}</span></p>
+                    {plan.price > 0 && <p className="text-[11px] text-[#00D4FF]">≈ ₹{inr(plan.price)} / month</p>}
                     <ul className="mt-3 space-y-1 text-xs text-[#888]">
                       <li>{plan.ram} RAM • {plan.cpu}</li>
                       <li>{plan.storage} Storage</li>
@@ -218,10 +231,41 @@ export default function DashboardPage() {
 
         {tab === "sites" && (
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
               <h2 className="font-grotesk text-xl font-bold">My Websites</h2>
               <button onClick={() => setShowDeploy(true)} className="px-5 py-2 rounded-full bg-white text-black text-sm font-medium">+ Deploy New</button>
             </div>
+
+            {/* LIVE ALERTS for user */}
+            {myWebsites.filter(w => w.status === "Error" || (w.errorCount || 0) > 0).length > 0 && (
+              <div className="space-y-2">
+                {myWebsites.filter(w => w.status === "Error" || (w.errorCount || 0) > 0).map(w => {
+                  const critical = needsManualAction(w);
+                  const errs = analyzeSite(w);
+                  return (
+                    <div key={w.id} className={`rounded-2xl p-4 border ${critical ? "bg-red-500/10 border-red-500/30" : "bg-yellow-500/10 border-yellow-500/30"}`}>
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                        <div>
+                          <p className={`text-sm font-semibold ${critical ? "text-red-300" : "text-yellow-300"}`}>
+                            {critical ? "🚨" : "⚠️"} {w.name} me {w.errorCount || 1} error hai
+                          </p>
+                          <p className="text-xs text-[#bbb] mt-1">{errs[0]?.title}: {errs[0]?.detail}</p>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <button onClick={() => setErrorSite(w)} className="px-4 py-2 rounded-full bg-black border border-[#333] text-xs">Details</button>
+                          <button onClick={() => {
+                            const fixed = autoFixSite(w);
+                            setWebsites(websites.map(x => x.id === w.id ? fixed : x));
+                            if (fixed.status === "Running") toast("Auto-fix ✅ " + w.name + " ab live hai", "success");
+                            else toast("Auto-fix se theek nahi hua — Telegram @Rolax112 pe help lo", "error");
+                          }} className="px-4 py-2 rounded-full bg-white text-black text-xs font-medium">⚡ Auto-Fix</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {myWebsites.length === 0 ? (
               <div className="rounded-2xl bg-[#111] border border-[#222] p-12 text-center">
@@ -236,6 +280,7 @@ export default function DashboardPage() {
                       <th className="text-left px-4 py-3">Name</th>
                       <th className="text-left px-4 py-3">URL</th>
                       <th className="text-left px-4 py-3">Stack</th>
+                      <th className="text-left px-4 py-3">File Type</th>
                       <th className="text-left px-4 py-3">Status</th>
                       <th className="text-left px-4 py-3">CPU / RAM</th>
                       <th className="text-left px-4 py-3">Actions</th>
@@ -247,7 +292,13 @@ export default function DashboardPage() {
                         <td className="px-4 py-3 font-medium">{site.name}</td>
                         <td className="px-4 py-3"><span className="text-[#00D4FF] text-xs">{site.url}</span></td>
                         <td className="px-4 py-3"><span className="px-2 py-1 rounded-full bg-black border border-[#222] text-xs">{site.stack}</span></td>
-                        <td className="px-4 py-3"><span className={`px-2 py-1 rounded-full text-xs border ${site.status === "Running" ? "bg-[#00ff88]/10 text-[#00ff88] border-[#00ff88]/20" : "bg-red-500/10 text-red-400 border-red-500/20"}`}>● {site.status}</span></td>
+                        <td className="px-4 py-3">
+                          <p className="text-xs">{site.fileType || site.stack + " File"}</p>
+                          <p className="text-[10px] text-[#666]">{site.botType || "—"} • {site.fileSize || "—"}</p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-1 rounded-full text-xs border ${site.status === "Running" ? "bg-[#00ff88]/10 text-[#00ff88] border-[#00ff88]/20" : site.status === "Error" ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}`}>{site.status === "Error" ? "⚠ Error" : "● " + site.status}</span>
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex gap-2">
                             <div className="w-16">
@@ -265,6 +316,14 @@ export default function DashboardPage() {
                             <button onClick={() => handleAction(site, "open")} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Open</button>
                             <button onClick={() => handleAction(site, "stop")} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">{site.status === "Running" ? "Stop" : "Start"}</button>
                             <button onClick={() => handleAction(site, "restart")} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Restart</button>
+                            {(site.status === "Error" || (site.errorCount || 0) > 0) && (
+                              <button onClick={() => {
+                                const fixed = autoFixSite(site);
+                                setWebsites(websites.map(x => x.id === site.id ? fixed : x));
+                                if (fixed.status === "Running") toast("Auto-fix ✅ errors clear ho gaye", "success");
+                                else toast("Manual fix needed — Telegram @Rolax112", "error");
+                              }} className="px-2 py-1 rounded-full bg-yellow-500/15 border border-yellow-500/30 text-yellow-300 text-xs">⚡ Fix</button>
+                            )}
                             <button onClick={() => setFileManagerSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Files</button>
                             <button onClick={() => setLogsSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Logs</button>
                             <button onClick={() => handleAction(site, "delete")} className="px-2 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-xs text-red-400 hover:bg-red-500 hover:text-white transition">Delete</button>
@@ -290,7 +349,8 @@ export default function DashboardPage() {
                   {plans.map(plan => (
                     <div key={plan.id} className={`rounded-2xl p-5 border ${plan.price === 0 ? "bg-[#111] border-[#222] opacity-75" : "bg-[#111] border-[#222]"}`}>
                       <h4 className="font-semibold">{plan.name}</h4>
-                      <p className="text-xl font-bold">${plan.price} <span className="text-xs text-[#666]">/mo</span></p>
+                      <p className="text-xl font-bold">{plan.price === 0 ? "Free" : `$${plan.price}`} <span className="text-xs text-[#666]">{plan.price === 0 ? "" : "/mo"}</span></p>
+                      {plan.price > 0 && <p className="text-[11px] text-[#00D4FF]">≈ ₹{inr(plan.price)} / month</p>}
                       <p className="text-xs text-[#666] mt-1">{plan.price === 0 ? "Free Forever" : "BEP-20 Crypto Only"}</p>
                       <button onClick={() => { if (plan.price === 0) { toast("Starter is free! No payment needed.", "info"); return; } setSelectedPlan(plan); }} className={`mt-3 w-full py-2 rounded-full text-sm font-medium ${plan.price === 0 ? "bg-[#222] text-[#666] border border-[#333]" : "bg-white text-black"}`}>{plan.price === 0 ? "Free - Active" : "Select Plan"}</button>
                     </div>
@@ -322,7 +382,7 @@ export default function DashboardPage() {
                 ) : (
                 <>
                 <h3 className="font-grotesk text-xl font-bold">Pay with Crypto (BEP-20 Only)</h3>
-                <p className="text-sm text-[#888] mt-1">Plan: <span className="text-white font-medium">{selectedPlan.name} - ${selectedPlan.price}</span></p>
+                <p className="text-sm text-[#888] mt-1">Plan: <span className="text-white font-medium">{selectedPlan.name} - ${selectedPlan.price} (≈ ₹{inr(selectedPlan.price)})</span></p>
 
                 <div className="mt-6 flex gap-3 flex-wrap">
                   {wallets.filter(w => ["BNB","USDT"].includes(w.symbol)).map(w => (
@@ -437,13 +497,58 @@ export default function DashboardPage() {
               </div>
               <div>
                 <label className="text-xs text-[#888]">Or Upload ZIP</label>
-                <input type="file" accept=".zip" onChange={e => setDeployData({ ...deployData, zip: e.target.files?.[0] })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-white file:text-black file:text-xs" />
+                <input type="file" accept=".zip,.py,.js,.html" onChange={e => setDeployData({ ...deployData, zip: e.target.files?.[0] })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-white file:text-black file:text-xs" />
+                {deployData.zip?.name && (
+                  <p className="text-[11px] text-[#00D4FF] mt-1">Detected: {detectFromFileName(deployData.zip.name).fileType} • {(deployData.zip.size / 1024 / 1024).toFixed(2)} MB</p>
+                )}
+                <p className="text-[10px] text-[#666] mt-1">Supported: .zip, .py (bot), .js (bot), .html — error aaye to deploy ke baad alert milega</p>
               </div>
               <div className="flex gap-3">
                 <button onClick={() => setShowDeploy(false)} className="flex-1 py-3 rounded-full bg-black border border-[#222] text-sm">Cancel</button>
                 <button onClick={handleDeploy} className="flex-1 py-3 rounded-full bg-white text-black font-medium text-sm">Deploy 🚀</button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error Details Modal */}
+      {errorSite && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-[680px] rounded-2xl bg-[#111] border border-[#222] p-6 max-h-[80vh] overflow-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="font-grotesk font-bold">Error Details - {errorSite.name}</h3>
+              <button onClick={() => setErrorSite(null)} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
+            </div>
+            <p className="text-xs text-[#888] mt-1">{errorSite.fileType} • {errorSite.botType} • {errorSite.url}</p>
+            <div className="mt-4 space-y-2">
+              {analyzeSite(errorSite).map((e, i) => (
+                <div key={i} className="rounded-xl bg-black border border-[#222] p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-red-300">❌ {e.title}</p>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${e.canAutoFix ? "bg-yellow-500/10 text-yellow-400" : "bg-red-500/10 text-red-400"}`}>{e.canAutoFix ? "auto-fix" : "manual"}</span>
+                  </div>
+                  <p className="text-xs text-[#888] mt-1">{e.detail}</p>
+                  <p className="text-xs text-[#00ff88] mt-1">💡 {e.fix}</p>
+                </div>
+              ))}
+              {analyzeSite(errorSite).length === 0 && <p className="text-xs text-[#00ff88]">✓ Koi error nahi — sab clear hai.</p>}
+            </div>
+            {needsManualAction(errorSite) && (
+              <div className="mt-4 rounded-xl bg-red-500/10 border border-red-500/30 p-3">
+                <p className="text-xs text-red-300">🚨 {MAX_ERRORS}+ errors — auto-fix kaam nahi karega. File delete karke dobara upload karo ya Telegram @Rolax112 pe help lo.</p>
+              </div>
+            )}
+            <div className="mt-4 flex gap-2">
+              <button onClick={() => {
+                const fixed = autoFixSite(errorSite);
+                setWebsites(websites.map(x => x.id === errorSite.id ? fixed : x));
+                setErrorSite(fixed.status === "Running" ? null : fixed);
+                toast(fixed.status === "Running" ? "Auto-fix ✅" : "Kuch errors manual fix chahiye", fixed.status === "Running" ? "success" : "error");
+              }} className="flex-1 py-3 rounded-full bg-white text-black text-sm font-medium">⚡ Auto-Fix Now</button>
+              <button onClick={() => { setWebsites(websites.filter(x => x.id !== errorSite.id)); setErrorSite(null); toast("Deleted", "info"); }} className="flex-1 py-3 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-sm">Delete File</button>
+            </div>
+            <p className="text-[11px] text-[#666] mt-3 text-center">Contact only on Telegram: <a href="https://t.me/Rolax112" target="_blank" className="text-[#00D4FF]">t.me/Rolax112</a></p>
           </div>
         </div>
       )}
@@ -481,12 +586,23 @@ export default function DashboardPage() {
               <button onClick={() => setLogsSite(null)} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
             </div>
             <div className="mt-4 rounded-xl bg-black border border-[#222] p-4 font-mono text-xs leading-6 overflow-auto">
-              <div className="text-[#00ff88]">[2025-10-31 12:00:01] Starting {logsSite.stack} app...</div>
-              <div className="text-white">[12:00:02] Build successful</div>
-              <div className="text-white">[12:00:03] Listening on port 3000</div>
-              <div className="text-[#00D4FF]">[12:00:04] GET / 200 - 12ms</div>
-              <div className="text-white">[12:00:05] Connected to database</div>
-              <div className="text-[#888]">[12:00:10] Health check OK</div>
+              <div className="text-[#00ff88]">[start] Starting {logsSite.stack} app ({logsSite.fileType})...</div>
+              {analyzeSite(logsSite).length === 0 ? (
+                <>
+                  <div className="text-white">[build] Build successful</div>
+                  <div className="text-white">[run] Listening on port 8080</div>
+                  <div className="text-[#00D4FF]">[http] GET / 200 - 12ms</div>
+                  <div className="text-[#888]">[health] Health check OK — bot online</div>
+                </>
+              ) : (
+                <>
+                  {analyzeSite(logsSite).map((e, i) => (
+                    <div key={i} className="text-red-400">[{e.code}] {e.title}: {e.detail}</div>
+                  ))}
+                  <div className="text-yellow-400">[exit] Process crashed (code 1) — {logsSite.errorCount || 1} error(s)</div>
+                  <div className="text-[#00D4FF]">[hint] {analyzeSite(logsSite)[0]?.fix}</div>
+                </>
+              )}
             </div>
           </div>
         </div>
