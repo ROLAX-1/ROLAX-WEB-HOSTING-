@@ -550,10 +550,23 @@ export default function DashboardPage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="font-grotesk font-bold">
-                  {lastReport.ok ? "✅ Deploy Verified" : "❌ Deploy Failed — Bot online nahi hoga"} — {reportSite.name}
+                  {lastReport.ok ? "Deploy Verified — chal raha hai" : `Deploy Failed — ${lastReport.errors.length} blocking error`} • {reportSite.name}
                 </h3>
-                <p className="text-xs text-[#888] mt-1">{lastReport.botType} • {lastReport.fileCount} files • {lastReport.fileSize} • entry: {lastReport.entryFile || "—"}</p>
-                {lastReport.botUsername && <p className="text-xs text-[#00ff88] mt-1">Bot live: @{lastReport.botUsername} {lastReport.tokenMasked ? `(token ${lastReport.tokenMasked})` : ""}</p>}
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {lastReport.ok ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#00ff88]/15 text-[#00ff88]">● Running</span>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">● Error — bot online nahi hoga</span>
+                  )}
+                  {lastReport.errors.length > 0 && <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-300">{lastReport.errors.length} error</span>}
+                  {lastReport.warnings.length > 0 && <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400">{lastReport.warnings.length} warning</span>}
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#888]">{lastReport.botType}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#888]">{lastReport.fileCount} files</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#888]">{lastReport.fileSize}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#888]">entry: {lastReport.entryFile || "—"}</span>
+                </div>
+                {lastReport.botUsername && <p className="text-xs text-[#00ff88] mt-2">✓ Bot verified live: @{lastReport.botUsername} {lastReport.tokenMasked ? `(token ${lastReport.tokenMasked})` : ""}</p>}
+                {!lastReport.botUsername && (lastReport.botType.includes("Telegram")) && <p className="text-xs text-red-300 mt-2">✕ Bot token verify nahi hua — bot chat me online nahi aayega</p>}
               </div>
               <button onClick={() => { setReportSite(null); setLastReport(null); }} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
             </div>
