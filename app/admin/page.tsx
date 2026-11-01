@@ -16,6 +16,7 @@ export default function AdminPage() {
   const [tab, setTab] = useState("overview");
   const [search, setSearch] = useState("");
   const [gClientId, setGClientId] = useState("");
+  const [openCheckSite, setOpenCheckSite] = useState<string | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { setGClientId(getGoogleClientId()); }, []);
@@ -271,7 +272,18 @@ export default function AdminPage() {
                           </div>
                         </div>
                         <div className="mt-3 space-y-2">
-                          {(errs.length ? errs : [{ code: "UNKNOWN", title: w.lastError || "Unknown error", detail: "Logs check karo", fix: "Re-deploy karke dekho", canAutoFix: false }]).map((e, i) => (
+                          {Array.isArray(w.checks) && w.checks.filter(c => c.level !== "ok").length > 0 ? (
+                            w.checks.filter(c => c.level !== "ok").map((c, i) => (
+                              <div key={"real" + i} className="rounded-xl bg-black border border-[#222] p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-xs font-medium text-red-300">{c.level === "error" ? "❌" : "⚠️"} {c.title}</p>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.fixable ? "bg-yellow-500/10 text-yellow-400" : "bg-red-500/10 text-red-400"}`}>{c.fixable ? "auto-fix possible" : "manual fix"}</span>
+                                </div>
+                                <p className="text-[11px] text-[#888] mt-1">{c.detail}</p>
+                                <p className="text-[10px] text-[#555] mt-1 font-mono">{c.code}</p>
+                              </div>
+                            ))
+                          ) : (errs.length ? errs : [{ code: "UNKNOWN", title: w.lastError || "Unknown error", detail: "Logs check karo", fix: "Re-deploy karke dekho", canAutoFix: false }]).map((e, i) => (
                             <div key={i} className="rounded-xl bg-black border border-[#222] p-3">
                               <div className="flex items-center justify-between gap-2">
                                 <p className="text-xs font-medium text-red-300">❌ {e.title}</p>
@@ -700,6 +712,8 @@ export default function AdminPage() {
                         <td className="px-3 py-3">
                           <div className="text-xs">
                             <p className="text-white">{w.fileType || w.stack + " File"}</p>
+                            {w.botUsername && <p className="text-[10px] text-[#00ff88]">✓ @{w.botUsername}</p>}
+                            {w.botType && <p className="text-[10px] text-[#666]">{w.botType}</p>}
                             {analyzeSite(w).length > 0 ? (
                               <p className={`text-[10px] ${needsManualAction(w) ? "text-red-400" : "text-yellow-400"}`}>
                                 ⚠ {w.errorCount || 0} error(s) {needsManualAction(w) ? "— delete karo" : "— auto-fix ready"}
@@ -744,6 +758,7 @@ export default function AdminPage() {
                               a.click();
                               toast("Downloaded: " + w.name + ".zip", "success");
                             }} className="px-2 py-1 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20 text-xs">Download</button>
+                            <button onClick={() => setOpenCheckSite(openCheckSite === w.id ? null : w.id)} className="px-2 py-1 rounded-full bg-[#6C5CE7]/15 border border-[#6C5CE7]/30 text-[#a89bff] text-xs">Checks</button>
                             <button onClick={() => { if (confirm("Delete hosted file?")) { setWebsites(websites.filter(x => x.id !== w.id)); toast("Deleted", "info"); } }} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-xs">Delete</button>
                           </div>
                         </td>
@@ -752,7 +767,36 @@ export default function AdminPage() {
                   </tbody>
                 </table>
               </div>
-              <p className="text-xs text-[#666]">💡 Auto-fix: Errors &lt; 5 → auto fix on click, Errors ≥5 → auto delete. Admin can download any hosted file.</p>
+
+              {/* Expanded check report for selected site */}
+              {openCheckSite && (() => {
+                const w = websites.find(x => x.id === openCheckSite);
+                if (!w) return null;
+                const list = Array.isArray(w.checks) && w.checks.length ? w.checks : [];
+                return (
+                  <div className="rounded-2xl bg-[#111] border border-[#6C5CE7]/30 p-5">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-semibold text-sm">Deploy Report — {w.name}</h3>
+                      <button onClick={() => setOpenCheckSite(null)} className="text-xs px-3 py-1 rounded-full bg-[#222]">Close</button>
+                    </div>
+                    <p className="text-xs text-[#888] mt-1">{w.botType || w.fileType} • {w.fileCount || 0} files • entry: {w.entryFile || "—"} {w.botUsername ? `• ✓ @${w.botUsername}` : ""}</p>
+                    <div className="mt-3 space-y-2">
+                      {list.length === 0 && <p className="text-xs text-[#666]">Is site ki detailed report nahi hai (purana deploy). User se dobara deploy karwao.</p>}
+                      {list.map((c, i) => (
+                        <div key={i} className={`rounded-xl p-3 border ${c.level === "ok" ? "bg-[#00ff88]/5 border-[#00ff88]/20" : c.level === "warn" ? "bg-yellow-500/5 border-yellow-500/20" : "bg-red-500/5 border-red-500/25"}`}>
+                          <p className={`text-xs font-medium ${c.level === "ok" ? "text-[#00ff88]" : c.level === "warn" ? "text-yellow-400" : "text-red-400"}`}>
+                            {c.level === "ok" ? "✓" : c.level === "warn" ? "⚠" : "✕"} {c.title}
+                          </p>
+                          <p className="text-[11px] text-[#999] mt-1">{c.detail}</p>
+                          <p className="text-[10px] text-[#555] font-mono mt-1">{c.code}{c.fixable ? " • auto-fixable" : ""}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <p className="text-xs text-[#666]">💡 Har file ka asli deploy report (bot token verify, dependencies, syntax) — <strong>Checks</strong> button se dekho. Auto-fix: Errors &lt; 5 → fix, ≥5 → delete alert.</p>
             </div>
           )}
 

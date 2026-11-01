@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useStore, ADMIN_EMAIL, durationLabel, durationInDays, planTotal } from "@/lib/store";
-import { analyzeSite, autoFixSite, needsManualAction, runDeployChecks, detectFromFileName, MAX_ERRORS } from "@/lib/hosting";
+import { analyzeSite, autoFixSite, needsManualAction, detectFromFileName, MAX_ERRORS } from "@/lib/hosting";
+import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, type DeployReport, type UploadedSource } from "@/lib/deploy";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
 
@@ -24,6 +25,10 @@ export default function DashboardPage() {
   const [errorSite, setErrorSite] = useState<any>(null);
   const [alertSite, setAlertSite] = useState<any>(null);
   const [gProfile, setGProfile] = useState<any>(null);
+  const [deploying, setDeploying] = useState(false);
+  const [deployProgress, setDeployProgress] = useState("");
+  const [reportSite, setReportSite] = useState<any>(null);
+  const [lastReport, setLastReport] = useState<DeployReport | null>(null);
   const [logsSite, setLogsSite] = useState<any>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
@@ -51,38 +56,46 @@ export default function DashboardPage() {
   const inr = (usd: number) => Math.round(usd * rate);
   const priceLabel = (usd: number) => (usd === 0 ? "Free" : `$${usd} / ₹${inr(usd)}`);
 
-  const handleDeploy = () => {
+  const handleDeploy = async () => {
     if (!deployData.name.trim()) { toast("Project name required", "error"); return; }
+    if (!deployData.zip) { toast("File upload karo (.py / .js / .zip) — warna host nahi hoga", "error"); return; }
+    setDeploying(true);
+    setDeployProgress("File padh rahe hain...");
+    let src: UploadedSource;
+    try {
+      src = await readUpload(deployData.zip);
+    } catch (e) {
+      setDeploying(false);
+      toast("File read nahi hui — .zip corrupt ho sakta hai", "error");
+      return;
+    }
+    setDeployProgress("Code check + bot token verify ho raha hai...");
+    const report = await runDeployChecks(src);
+    setDeployProgress("Result save kar rahe hain...");
     const url = `${deployData.name.toLowerCase().replace(/\s+/g, "-")}.rolax.host`;
-    // File type upload se detect karo
-    const det = deployData.zip?.name ? detectFromFileName(deployData.zip.name) : { fileType: deployData.stack + (deployData.stack === "HTML" ? " Website" : " Bot"), botType: deployData.stack === "HTML" ? "Static Site" : "Bot", stack: deployData.stack };
-    let newSite: any = {
+    const site: any = {
       id: "ws_" + Date.now(),
       userId: auth.id,
       name: deployData.name,
       url,
-      stack: det.stack || deployData.stack,
-      status: "Running" as const,
-      cpu: Math.floor(Math.random() * 40) + 10,
-      ram: Math.floor(Math.random() * 40) + 20,
-      fileType: det.fileType,
-      botType: det.botType,
-      errorCount: 0,
-      deployedAt: new Date().toISOString(),
-      fileSize: deployData.zip?.size ? (deployData.zip.size / 1024 / 1024).toFixed(1) + " MB" : (Math.random() * 10 + 1).toFixed(1) + " MB",
-      createdAt: new Date().toISOString()
+      stack: report.stack,
+      cpu: report.ok ? Math.floor(Math.random() * 30) + 8 : 0,
+      ram: report.ok ? Math.floor(Math.random() * 35) + 18 : 0,
+      fileSize: report.fileSize,
+      createdAt: new Date().toISOString(),
+      ...reportToSiteFields(report),
+      entryFile: report.entryFile,
+      src: src.files.map(f => ({ name: f.name, content: f.content.slice(0, 4000) })),
     };
-    // Deploy ke baad automatic health-check
-    newSite = runDeployChecks(newSite);
-    setWebsites([...websites, newSite]);
+    setWebsites([...websites, site]);
+    setDeploying(false);
+    setDeployProgress("");
     setShowDeploy(false);
     setDeployData({ name: "", stack: "HTML", github: "", zip: null });
-    if (newSite.status === "Error") {
-      setAlertSite(newSite);
-      toast("Deploy hua par error mila — neeche error details dekho", "error");
-    } else {
-      toast("Deployed successfully! Site live hai 🚀", "success");
-    }
+    setReportSite(site);
+    setLastReport(report);
+    if (report.ok) toast(report.botUsername ? `Bot @${report.botUsername} verified — live hai ✅` : "Deploy verified — site live hai ✅", "success");
+    else toast(`${report.errors.length} blocking error — bot online nahi hoga`, "error");
   };
 
   const handleAction = (site: any, action: string) => {
@@ -306,7 +319,8 @@ export default function DashboardPage() {
                         <td className="px-4 py-3"><span className="px-2 py-1 rounded-full bg-black border border-[#222] text-xs">{site.stack}</span></td>
                         <td className="px-4 py-3">
                           <p className="text-xs">{site.fileType || site.stack + " File"}</p>
-                          <p className="text-[10px] text-[#666]">{site.botType || "—"} • {site.fileSize || "—"}</p>
+                          <p className="text-[10px] text-[#666]">{site.botType || "—"} • {site.fileSize || "—"}{site.fileCount ? ` • ${site.fileCount} files` : ""}</p>
+                          {site.botUsername && <p className="text-[10px] text-[#00ff88]">✓ @{site.botUsername} verified</p>}
                         </td>
                         <td className="px-4 py-3">
                           <span className={`px-2 py-1 rounded-full text-xs border ${site.status === "Running" ? "bg-[#00ff88]/10 text-[#00ff88] border-[#00ff88]/20" : site.status === "Error" ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}`}>{site.status === "Error" ? "⚠ Error" : "● " + site.status}</span>
@@ -338,6 +352,10 @@ export default function DashboardPage() {
                             )}
                             <button onClick={() => setFileManagerSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Files</button>
                             <button onClick={() => setLogsSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Logs</button>
+                            <button onClick={() => {
+                              if (site.checks?.length) { setReportSite(site); setLastReport({ ok: site.status === "Running", botType: site.botType || "-", fileType: site.fileType || "-", stack: site.stack, checks: site.checks, errors: site.checks.filter((c: any) => c.level === "error"), warnings: site.checks.filter((c: any) => c.level === "warn"), botUsername: site.botUsername, tokenMasked: site.tokenMasked, fileCount: site.fileCount || 0, fileSize: site.fileSize || "-", files: [], entryFile: site.entryFile, startedAt: site.deployedAt || "", finishedAt: site.deployedAt || "" }); }
+                              else toast("Is site ki check report available nahi — dobara deploy karke verify karo", "info");
+                            }} className="px-2 py-1 rounded-full bg-[#6C5CE7]/15 border border-[#6C5CE7]/30 text-[#a89bff] text-xs">Report</button>
                             <button onClick={() => handleAction(site, "delete")} className="px-2 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-xs text-red-400 hover:bg-red-500 hover:text-white transition">Delete</button>
                           </div>
                         </td>
@@ -510,17 +528,72 @@ export default function DashboardPage() {
               </div>
               <div>
                 <label className="text-xs text-[#888]">Or Upload ZIP</label>
-                <input type="file" accept=".zip,.py,.js,.html" onChange={e => setDeployData({ ...deployData, zip: e.target.files?.[0] })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-white file:text-black file:text-xs" />
+                <input type="file" accept=".zip,.py,.js,.ts,.html,.json,.txt" onChange={e => setDeployData({ ...deployData, zip: e.target.files?.[0] })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-white file:text-black file:text-xs" />
                 {deployData.zip?.name && (
                   <p className="text-[11px] text-[#00D4FF] mt-1">Detected: {detectFromFileName(deployData.zip.name).fileType} • {(deployData.zip.size / 1024 / 1024).toFixed(2)} MB</p>
                 )}
-                <p className="text-[10px] text-[#666] mt-1">Supported: .zip, .py (bot), .js (bot), .html — error aaye to deploy ke baad alert milega</p>
+                <p className="text-[10px] text-[#666] mt-1">Zaroori: .py (bot), .js (bot), .zip (poora project) — deploy se pehle code aur bot token asli me verify hota hai</p>
               </div>
               <div className="flex gap-3">
                 <button onClick={() => setShowDeploy(false)} className="flex-1 py-3 rounded-full bg-black border border-[#222] text-sm">Cancel</button>
-                <button onClick={handleDeploy} className="flex-1 py-3 rounded-full bg-white text-black font-medium text-sm">Deploy 🚀</button>
+                <button onClick={handleDeploy} disabled={deploying} className="flex-1 py-3 rounded-full bg-white text-black font-medium text-sm disabled:opacity-60">{deploying ? deployProgress || "Checking..." : "Deploy & Verify 🚀"}</button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deploy Verification Report Modal */}
+      {reportSite && lastReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-[720px] rounded-2xl bg-[#111] border border-[#222] p-6 max-h-[85vh] overflow-auto">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-grotesk font-bold">
+                  {lastReport.ok ? "✅ Deploy Verified" : "❌ Deploy Failed — Bot online nahi hoga"} — {reportSite.name}
+                </h3>
+                <p className="text-xs text-[#888] mt-1">{lastReport.botType} • {lastReport.fileCount} files • {lastReport.fileSize} • entry: {lastReport.entryFile || "—"}</p>
+                {lastReport.botUsername && <p className="text-xs text-[#00ff88] mt-1">Bot live: @{lastReport.botUsername} {lastReport.tokenMasked ? `(token ${lastReport.tokenMasked})` : ""}</p>}
+              </div>
+              <button onClick={() => { setReportSite(null); setLastReport(null); }} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {lastReport.checks.map((c, i) => (
+                <div key={i} className={`rounded-xl p-3 border ${c.level === "ok" ? "bg-[#00ff88]/5 border-[#00ff88]/20" : c.level === "warn" ? "bg-yellow-500/5 border-yellow-500/20" : "bg-red-500/5 border-red-500/25"}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className={`text-xs font-medium ${c.level === "ok" ? "text-[#00ff88]" : c.level === "warn" ? "text-yellow-400" : "text-red-400"}`}>
+                      {c.level === "ok" ? "✓" : c.level === "warn" ? "⚠" : "✕"} {c.title}
+                    </p>
+                    {c.fixable && <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white shrink-0">auto-fixable</span>}
+                  </div>
+                  <p className="text-[11px] text-[#999] mt-1 break-words">{c.detail}</p>
+                  <p className="text-[10px] text-[#555] mt-1 font-mono">{c.code}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button onClick={async () => {
+                if (!reportSite.src) { toast("Source files available nahi — dobara deploy karo", "error"); return; }
+                setDeploying(true);
+                const { report, applied } = await autoFixAndVerify({ files: reportSite.src, binaryCount: 0, totalBytes: 0 }, lastReport);
+                const fields = reportToSiteFields(report);
+                setWebsites(websites.map(x => x.id === reportSite.id ? { ...x, ...fields, stack: report.stack } as any : x));
+                setLastReport(report);
+                setReportSite({ ...reportSite, ...fields });
+                setDeploying(false);
+                toast(applied.length ? `${applied.length} fix apply hua — ${report.ok ? "ab bot online hai ✅" : "kuch errors bache hain"}` : "Koi auto-fixable error nahi mila", report.ok ? "success" : "error");
+              }} className="flex-1 min-w-[180px] py-3 rounded-full bg-white text-black text-sm font-medium disabled:opacity-60" disabled={deploying}>
+                {deploying ? "Fixing..." : "⚡ Auto-Fix & Re-Verify"}
+              </button>
+              <button onClick={() => { setErrorSite(reportSite); setReportSite(null); }} className="flex-1 min-w-[140px] py-3 rounded-full bg-[#222] border border-[#333] text-sm">Full Details</button>
+              <button onClick={() => { setLogsSite(reportSite); setReportSite(null); }} className="flex-1 min-w-[120px] py-3 rounded-full bg-[#00D4FF]/10 border border-[#00D4FF]/20 text-[#00D4FF] text-sm">Logs</button>
+              {!lastReport.ok && (
+                <button onClick={() => { if (confirm("Delete this failed deploy?")) { setWebsites(websites.filter(x => x.id !== reportSite.id)); setReportSite(null); setLastReport(null); toast("Deleted", "info"); } }} className="py-3 px-5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-sm">Delete</button>
+              )}
+            </div>
+            <p className="text-[11px] text-[#666] mt-3 text-center">Bot chat me online nahi aa raha? Telegram: <a href="https://t.me/Rolax112" target="_blank" className="text-[#00D4FF]">t.me/Rolax112</a></p>
           </div>
         </div>
       )}
@@ -535,7 +608,17 @@ export default function DashboardPage() {
             </div>
             <p className="text-xs text-[#888] mt-1">{errorSite.fileType} • {errorSite.botType} • {errorSite.url}</p>
             <div className="mt-4 space-y-2">
-              {analyzeSite(errorSite).map((e, i) => (
+              {Array.isArray(errorSite.checks) && errorSite.checks.length > 0 && errorSite.checks.filter((c: any) => c.level !== "ok").map((c: any, i: number) => (
+                <div key={"chk" + i} className="rounded-xl bg-black border border-[#222] p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-red-300">{c.level === "error" ? "❌" : "⚠️"} {c.title}</p>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.fixable ? "bg-yellow-500/10 text-yellow-400" : "bg-red-500/10 text-red-400"}`}>{c.fixable ? "auto-fix" : "manual"}</span>
+                  </div>
+                  <p className="text-xs text-[#888] mt-1">{c.detail}</p>
+                  <p className="text-[10px] text-[#555] mt-1 font-mono">{c.code}</p>
+                </div>
+              ))}
+              {(!errorSite.checks || errorSite.checks.length === 0) && analyzeSite(errorSite).map((e, i) => (
                 <div key={i} className="rounded-xl bg-black border border-[#222] p-3">
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-red-300">❌ {e.title}</p>
@@ -600,7 +683,7 @@ export default function DashboardPage() {
             </div>
             <div className="mt-4 rounded-xl bg-black border border-[#222] p-4 font-mono text-xs leading-6 overflow-auto">
               <div className="text-[#00ff88]">[start] Starting {logsSite.stack} app ({logsSite.fileType})...</div>
-              {analyzeSite(logsSite).length === 0 ? (
+              {(logsSite.checks ? logsSite.checks.filter((c: any) => c.level !== "ok").length === 0 : analyzeSite(logsSite).length === 0) ? (
                 <>
                   <div className="text-white">[build] Build successful</div>
                   <div className="text-white">[run] Listening on port 8080</div>
@@ -609,8 +692,8 @@ export default function DashboardPage() {
                 </>
               ) : (
                 <>
-                  {analyzeSite(logsSite).map((e, i) => (
-                    <div key={i} className="text-red-400">[{e.code}] {e.title}: {e.detail}</div>
+                  {(logsSite.checks?.length ? logsSite.checks.filter((c: any) => c.level !== "ok") : analyzeSite(logsSite)).map((e: any, i: number) => (
+                    <div key={i} className={e.level === "warn" ? "text-yellow-400" : "text-red-400"}>[{e.code}] {e.title}: {e.detail}</div>
                   ))}
                   <div className="text-yellow-400">[exit] Process crashed (code 1) — {logsSite.errorCount || 1} error(s)</div>
                   <div className="text-[#00D4FF]">[hint] {analyzeSite(logsSite)[0]?.fix}</div>
