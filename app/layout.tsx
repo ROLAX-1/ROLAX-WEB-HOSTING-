@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Toaster } from "@/components/ui/Toaster";
+import BotWorker from "@/components/BotWorker";
 
 export const metadata: Metadata = {
   title: "ROLAX HOST - Host Python, Node.js & HTML at Lightning Speed",
@@ -14,6 +15,7 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className="antialiased bg-black text-white">
         {children}
+        <BotWorker />
         <Toaster />
       </body>
     </html>

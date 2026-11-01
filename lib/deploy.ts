@@ -195,8 +195,28 @@ function tabsSpacesMixed(code: string): boolean {
 
 async function verifyTelegramToken(token: string): Promise<{ ok: boolean; username?: string; detail: string }> {
   try {
+    // Browser se direct Telegram call CORS se block hoti hai — server bridge use karo
+    let j: any = null;
+    let status = 0;
+    try {
+      const res = await fetch("/api/telegram", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "getMe", token }),
+      });
+      status = res.status;
+      j = await res.json().catch(() => null);
+      if (j && typeof j.ok === "boolean") {
+        if (j.ok && j.result?.username) {
+          return { ok: true, username: j.result.username, detail: `Telegram ne token verify kiya — @${j.result.username} online hai` };
+        }
+        const desc = j?.description || j?.error || `HTTP ${status}`;
+        return { ok: false, detail: `Telegram API: ${desc}` };
+      }
+    } catch { /* fallback to direct */ }
     const res = await fetch(`https://api.telegram.org/bot${token}/getMe`, { method: "GET" });
-    const j = await res.json().catch(() => null);
+    status = res.status;
+    j = await res.json().catch(() => null);
     if (j?.ok && j?.result?.username) {
       return { ok: true, username: j.result.username, detail: `Telegram ne token verify kiya — @${j.result.username} online hai` };
     }

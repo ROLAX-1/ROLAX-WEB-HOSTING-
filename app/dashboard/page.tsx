@@ -4,7 +4,10 @@ import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useStore, ADMIN_EMAIL, durationLabel, durationInDays, planTotal } from "@/lib/store";
 import { analyzeSite, autoFixSite, needsManualAction, detectFromFileName, MAX_ERRORS } from "@/lib/hosting";
-import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, type DeployReport, type UploadedSource } from "@/lib/deploy";
+import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, extractTelegramToken, type DeployReport, type UploadedSource } from "@/lib/deploy";
+import { saveBotToken, getBotToken, removeBotToken } from "@/lib/bottoken";
+import { extractCommands } from "@/lib/botruntime";
+import { useBotStatus, restartBot } from "@/components/BotWorker";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
 
@@ -29,6 +32,9 @@ export default function DashboardPage() {
   const [deployProgress, setDeployProgress] = useState("");
   const [reportSite, setReportSite] = useState<any>(null);
   const [lastReport, setLastReport] = useState<DeployReport | null>(null);
+  const [botPanelSite, setBotPanelSite] = useState<any>(null);
+  const [manualToken, setManualToken] = useState("");
+  const [fixToken, setFixToken] = useState("");
   const [logsSite, setLogsSite] = useState<any>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
@@ -64,6 +70,9 @@ export default function DashboardPage() {
     let src: UploadedSource;
     try {
       src = await readUpload(deployData.files);
+      if (manualToken.trim() && !extractTelegramToken(src)) {
+        src = { ...src, files: [...src.files, { name: ".env", content: `BOT_TOKEN=${manualToken.trim()}\n` }] };
+      }
     } catch (e) {
       setDeploying(false);
       toast("File read nahi hui — .zip corrupt ho sakta hai", "error");
@@ -93,6 +102,13 @@ export default function DashboardPage() {
     setDeployProgress("");
     setShowDeploy(false);
     setDeployData({ name: "", stack: "HTML", github: "", files: [] });
+    setManualToken("");
+    // 24/7 runtime: token save + worker start
+    const tk = extractTelegramToken(src);
+    if (tk) {
+      saveBotToken(site.id, tk);
+      setTimeout(() => window.dispatchEvent(new Event("rolax:bot-start")), 300);
+    }
     setReportSite(site);
     setLastReport(report);
     if (report.ok) toast(report.botUsername ? `Bot @${report.botUsername} verified — live hai ✅` : `Site live: /site/${site.name.toLowerCase().replace(/\s+/g, "-")} ✅`, "success");
@@ -354,6 +370,9 @@ export default function DashboardPage() {
                             )}
                             <button onClick={() => setFileManagerSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Files</button>
                             <button onClick={() => setLogsSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Logs</button>
+                            {/telegram/i.test(site.botType || "") && (
+                              <button onClick={() => setBotPanelSite(site)} className="px-2 py-1 rounded-full bg-[#00ff88]/10 border border-[#00ff88]/25 text-[#00ff88] text-xs">Bot 24/7</button>
+                            )}
                             <button onClick={() => {
                               if (site.checks?.length) { setReportSite(site); setLastReport({ ok: site.status === "Running", botType: site.botType || "-", fileType: site.fileType || "-", stack: site.stack, checks: site.checks, errors: site.checks.filter((c: any) => c.level === "error"), warnings: site.checks.filter((c: any) => c.level === "warn"), botUsername: site.botUsername, tokenMasked: site.tokenMasked, fileCount: site.fileCount || 0, fileSize: site.fileSize || "-", files: [], entryFile: site.entryFile, startedAt: site.deployedAt || "", finishedAt: site.deployedAt || "" }); }
                               else toast("Is site ki check report available nahi — dobara deploy karke verify karo", "info");
@@ -552,11 +571,29 @@ export default function DashboardPage() {
               </div>
               <div className="flex gap-3">
                 <button onClick={() => setShowDeploy(false)} className="flex-1 py-3 rounded-full bg-black border border-[#222] text-sm">Cancel</button>
-                <button onClick={handleDeploy} disabled={deploying} className="flex-1 py-3 rounded-full bg-white text-black font-medium text-sm disabled:opacity-60">{deploying ? deployProgress || "Checking..." : "Deploy & Verify 🚀"}</button>
+                {/telegram|bot/i.test(detectFromFileName(deployData.files[0]?.name || "").fileType) && (
+              <div className="rounded-2xl bg-black border border-[#6C5CE7]/30 p-4">
+                <label className="text-xs text-[#a89bff]">Bot Token (optional — bot ko 24/7 online karne ke liye)</label>
+                <input
+                  value={manualToken}
+                  onChange={e => setManualToken(e.target.value)}
+                  placeholder="123456789:AAH... (BotFather se)"
+                  className="mt-1 w-full px-4 py-3 rounded-xl bg-[#111] border border-[#222] text-sm font-mono text-xs"
+                />
+                <p className="text-[10px] text-[#666] mt-1">Token @BotFather se lo. Khali chhodo to code/.env se dhoondha jayega. Token sirf tumhare browser me save hota hai.</p>
+              </div>
+            )}
+
+            <button onClick={handleDeploy} disabled={deploying} className="flex-1 py-3 rounded-full bg-white text-black font-medium text-sm disabled:opacity-60">{deploying ? deployProgress || "Checking..." : "Deploy & Verify 🚀"}</button>
               </div>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Bot 24/7 status panel */}
+      {botPanelSite && (
+        <BotLivePanel site={botPanelSite} onClose={() => setBotPanelSite(null)} onDeleted={() => { setWebsites(websites.filter(x => x.id !== botPanelSite.id)); removeBotToken(botPanelSite.id); setBotPanelSite(null); }} />
       )}
 
       {/* Deploy Verification Report Modal */}
@@ -601,6 +638,37 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
+
+            {!lastReport.ok && lastReport.errors.some(e => e.code === "NO_TOKEN" || e.code === "TOKEN_BAD") && (
+              <div className="mt-4 rounded-2xl bg-[#6C5CE7]/10 border border-[#6C5CE7]/30 p-4">
+                <p className="text-xs text-[#a89bff] font-medium">Bot token fix karo — yahi auto-fix hai</p>
+                <div className="flex gap-2 mt-2">
+                  <input
+                    value={fixToken}
+                    onChange={e => setFixToken(e.target.value)}
+                    placeholder="123456789:AAH..."
+                    className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-xs font-mono"
+                  />
+                  <button onClick={async () => {
+                    const t = fixToken.trim();
+                    if (!/^\d{6,12}:[A-Za-z0-9_-]{20,60}$/.test(t)) { toast("Token format galat hai (123456789:AA...)", "error"); return; }
+                    setDeploying(true);
+                    const files = [...(reportSite.src || []), { name: ".env", content: `BOT_TOKEN=${t}\n` }];
+                    const reReport = await runDeployChecks({ files, binaryCount: 0, totalBytes: 0 });
+                    const fields = reportToSiteFields(reReport);
+                    setWebsites(websites.map(x => x.id === reportSite.id ? { ...x, ...fields, stack: reReport.stack } as any : x));
+                    saveBotToken(reportSite.id, t);
+                    window.dispatchEvent(new Event("rolax:bot-start"));
+                    setLastReport(reReport);
+                    setReportSite({ ...reportSite, ...fields, src: files });
+                    setDeploying(false);
+                    setFixToken("");
+                    toast(reReport.botUsername ? `Token verified ✅ @${reReport.botUsername} — bot 24/7 online` : "Token verify nahi hua — BotFather se naya token lo", reReport.botUsername ? "success" : "error");
+                  }} disabled={deploying} className="px-4 py-2 rounded-full bg-white text-black text-xs font-medium disabled:opacity-60">Save & Verify</button>
+                </div>
+                <p className="text-[10px] text-[#666] mt-1">Save karte hi token code me inject hoga, asli me verify hoga aur bot 24/7 start ho jayega.</p>
+              </div>
+            )}
 
             <div className="mt-4 flex flex-wrap gap-2">
               <button onClick={async () => {
@@ -735,6 +803,78 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---------------- Bot 24/7 live panel ---------------- */
+function BotLivePanel({ site, onClose, onDeleted }: { site: any; onClose: () => void; onDeleted: () => void }) {
+  const rt = useBotStatus(site.id);
+  const token = getBotToken(site.id);
+  const cmds = rt?.commands?.length ? rt.commands : extractCommands(site.src || []);
+  const online = rt?.status === "online";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+      <div className="w-full max-w-[640px] rounded-2xl bg-[#111] border border-[#222] p-6 max-h-[85vh] overflow-auto">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-grotesk font-bold">Bot 24/7 — {site.name}</h3>
+            <p className="text-xs text-[#888] mt-1">{site.botType} • {site.fileCount || 0} files • entry: {site.entryFile || "—"}</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
+        </div>
+
+        <div className={`mt-4 rounded-2xl p-4 border ${online ? "bg-[#00ff88]/5 border-[#00ff88]/25" : "bg-yellow-500/5 border-yellow-500/25"}`}>
+          <div className="flex items-center justify-between">
+            <p className={`text-sm font-semibold ${online ? "text-[#00ff88]" : "text-yellow-400"}`}>
+              {online ? "● ONLINE — 24/7 chalu hai" : rt?.status === "error" ? "✕ Token problem" : "◐ Starting..."}
+            </p>
+            {rt?.username && <span className="text-xs text-[#00D4FF]">@{rt.username}</span>}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3 text-center">
+            <div className="rounded-xl bg-black border border-[#222] p-2">
+              <p className="text-[10px] text-[#888]">Replies</p>
+              <p className="text-sm font-bold">{rt?.responses || 0}</p>
+            </div>
+            <div className="rounded-xl bg-black border border-[#222] p-2">
+              <p className="text-[10px] text-[#888]">Poll cycles</p>
+              <p className="text-sm font-bold">{rt?.lastUpdateId ? "live" : "0"}</p>
+            </div>
+            <div className="rounded-xl bg-black border border-[#222] p-2">
+              <p className="text-[10px] text-[#888]">Errors</p>
+              <p className="text-sm font-bold">{rt?.errors || 0}</p>
+            </div>
+            <div className="rounded-xl bg-black border border-[#222] p-2">
+              <p className="text-[10px] text-[#888]">Last reply</p>
+              <p className="text-[10px] font-semibold">{rt?.lastReplyAt ? new Date(rt.lastReplyAt).toLocaleTimeString() : "—"}</p>
+            </div>
+          </div>
+          {rt?.lastError && <p className="text-[11px] text-red-300 mt-2">⚠ {rt.lastError}</p>}
+          {!token && <p className="text-[11px] text-red-300 mt-2">⚠ Token local storage me nahi mila — dobara deploy karo taaki bot start ho.</p>}
+          <p className="text-[10px] text-[#666] mt-2">Bot har 4 second me messages check karta hai aur automatically reply karta hai (webhook auto-clean hota hai).</p>
+        </div>
+
+        <div className="mt-4">
+          <p className="text-xs text-[#888] mb-2">Commands jo bot samajhta hai ({cmds.length})</p>
+          <div className="space-y-2">
+            {cmds.length === 0 && <p className="text-xs text-[#666]">Code me commands nahi mile — default /start /help /price /status chal rahe hain.</p>}
+            {cmds.map((c, i) => (
+              <div key={i} className="rounded-xl bg-black border border-[#222] p-3">
+                <p className="text-xs font-mono text-[#00D4FF]">/{c.trigger}</p>
+                <p className="text-[11px] text-[#aaa] mt-1 whitespace-pre-wrap">{c.reply}</p>
+                <p className="text-[10px] text-[#555] mt-1 font-mono">{c.source}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button onClick={() => { restartBot(site.id); window.dispatchEvent(new Event("rolax:bot-start")); }} className="flex-1 min-w-[140px] py-3 rounded-full bg-white text-black text-sm font-medium">↻ Restart Bot</button>
+          <a href={token ? `https://t.me/${(rt?.username || "").replace("@", "")}` : "#"} target="_blank" className={`flex-1 min-w-[140px] py-3 rounded-full text-sm font-medium text-center ${rt?.username ? "bg-[#00D4FF]/15 border border-[#00D4FF]/30 text-[#00D4FF]" : "bg-[#222] text-[#666] pointer-events-none"}`}>Open in Telegram</a>
+          <button onClick={() => { if (confirm("Bot delete karein? 24/7 runtime band ho jayega.")) onDeleted(); }} className="py-3 px-5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-sm">Delete</button>
+        </div>
+      </div>
     </div>
   );
 }
