@@ -36,7 +36,7 @@ export default function DashboardPage() {
   const [botPanelSite, setBotPanelSite] = useState<any>(null);
   const [manualToken, setManualToken] = useState("");
   const [fixToken, setFixToken] = useState("");
-  const [aiFix, setAiFix] = useState<{ engine: string; summary: string; notes: string[]; fixes: any[] } | null>(null);
+  const [aiFix, setAiFix] = useState<{ engine: string; summary: string; notes: string[]; fixes: any[]; supportFiles?: any[] } | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [logsSite, setLogsSite] = useState<any>(null);
 
@@ -666,7 +666,7 @@ export default function DashboardPage() {
                       const res = await fetch("/api/ai/autofix", {
                         method: "POST",
                         headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ files: reportSite.src || [], checks: lastReport.checks, stack: lastReport.stack }),
+                        body: JSON.stringify({ files: reportSite.src || [], checks: lastReport.checks, stack: lastReport.stack, entryFile: lastReport.entryFile }),
                       });
                       const j = await res.json();
                       if (!j.ok) { toast(j.error || "AI fix fail hua", "error"); setAiBusy(false); return; }
@@ -700,6 +700,9 @@ export default function DashboardPage() {
                   {aiFix.fixes.map((f: any, i: number) => (
                     <p key={i} className="text-[10px] text-[#888] mt-1">• {f.file} — {f.reason}</p>
                   ))}
+                  {aiFix.supportFiles?.length ? (
+                    <p className="text-[10px] text-[#00ff88] mt-1">📄 Generated: {aiFix.supportFiles.map((s: any) => s.file).join(", ")}</p>
+                  ) : null}
                   {aiFix.notes?.map((n, i) => <p key={i} className="text-[10px] text-[#666] mt-1">💡 {n}</p>)}
                 </div>
               )}

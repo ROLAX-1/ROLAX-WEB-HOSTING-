@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { generateSupportFiles, mergeSupportFiles, type SourceFile } from "@/lib/supportfiles";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,6 +25,8 @@ Rules:
 - Fix: missing imports, wrong entry filename/start command, tabs vs spaces, hardcoded port (use env PORT), missing requirements imports, infinite polling by default, load token from os.environ/os.getenv with fallback to the literal token already present.
 - Never remove user-facing bot commands or their reply texts.
 - Do not invent features. Keep the code minimal and runnable.
+- You MAY also output support files: requirements.txt (all pip packages for the imports), .env (BOT_TOKEN / API_ID / API_HASH / PORT keys with the token already present in the code), .env.example, package.json, Procfile, README.md. Use full file content in "code" as usual.
+- Always include requirements.txt for Python and .env for any code that needs a token.
 - If nothing is broken, return empty fixes array and explain in summary.`;
 
 function localFixes(files: InFile[], checks: any[]): AiResult {
@@ -155,12 +158,25 @@ export async function POST(req: NextRequest) {
     result.notes = [...(ai.notes || []), ...fallback.notes];
   }
 
+  // ---- support files (requirements.txt / .env / package.json / Procfile / README) hamesha ----
+  const support = generateSupportFiles(files as SourceFile[], body.stack || "", body.entryFile);
+  const alreadyCovered = support.filter(s => result.fixes.some(f => f.file === s.file));
+  support.forEach(s => {
+    if (!alreadyCovered.includes(s)) result.fixes.push({ file: s.file, reason: s.reason, code: s.content });
+  });
+  if (support.length) {
+    result.notes = [...(result.notes || []), ...support.map(s => `${s.file}: ${s.reason}`)];
+    result.summary = `${result.summary}${result.summary.endsWith(".") ? "" : " +"} ${support.length} support file(s) (requirements/.env/package.json)`;
+    result.ok = true;
+  }
+
   return NextResponse.json({
     ok: true,
     engine: result.engine,
     summary: result.summary,
     fixes: result.fixes,
     notes: result.notes,
+    supportFiles: support.map(s => ({ file: s.file, reason: s.reason })),
     aiAvailable: !!(process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY),
     at: new Date().toISOString(),
   });

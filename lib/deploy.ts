@@ -2,6 +2,7 @@
 // ROLAX HOST - REAL deploy verification pipeline
 // File padhta hai, bot type detect karta hai, Telegram token ko asli Telegram API se verify karta hai.
 import JSZip from "jszip";
+import { generateSupportFiles, mergeSupportFiles } from "./supportfiles";
 
 export type CheckLevel = "ok" | "warn" | "error";
 
@@ -420,6 +421,15 @@ export async function autoFixAndVerify(src: UploadedSource, report: DeployReport
       });
       applied.push("Hardcoded port → process.env.PORT");
     }
+  }
+
+  // support files: requirements.txt / .env / package.json / Procfile / README
+  const support = generateSupportFiles(files, report.stack, report.entryFile);
+  if (support.length) {
+    const merged = mergeSupportFiles(files, support);
+    files.length = 0;
+    merged.forEach(f => files.push(f));
+    support.forEach(sp => applied.push(`${sp.file}: ${sp.reason}`));
   }
 
   // generated files add karo (requirements.txt / package.json)
