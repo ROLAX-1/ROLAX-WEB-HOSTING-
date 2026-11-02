@@ -107,16 +107,19 @@ export default function BotWorker() {
         if (!/telegram/i.test(w.botType || "")) return false;
         if (!getBotToken(w.id)) return false;
         // plan gate: plan chalu hai ya expired?
-        const owner = users.find(u => u.id === w.userId || u.email === w.userId);
+        const owner = users.find(u => u.id === w.userId || u.email === w.userId) as any;
         const st = planStatusFor(owner, plans);
-        // plan chalu hai to 24/7; expired/free to nahi
-        return hasFeature(st.plan, "bot_24x7", st.expired);
+        if (st.expired) return false;
+        if (owner?.entitlements && owner.entitlements["bot_24x7"] !== undefined) return !!owner.entitlements["bot_24x7"];
+        // plan chalu hai to 24/7
+        return hasFeature(st.plan, "bot_24x7", false);
       });
       // expired plan wale bots ko offline mark karo
       store.websites.filter(w => /telegram/i.test(w.botType || "")).forEach(w => {
-        const owner = users.find(u => u.id === w.userId || u.email === w.userId);
+        const owner = users.find(u => u.id === w.userId || u.email === w.userId) as any;
         const st = planStatusFor(owner, plans);
-        if (hasFeature(st.plan, "bot_24x7", st.expired) === false) {
+        const allowed = !st.expired && (owner?.entitlements?.["bot_24x7"] !== undefined ? !!owner.entitlements["bot_24x7"] : hasFeature(st.plan, "bot_24x7", false));
+        if (allowed === false) {
           state[w.id] = { ...(state[w.id] || { responses: 0, errors: 0, commands: [] }), status: "offline", lastError: st.expired ? "Plan expired — renew karo" : "Is plan me 24/7 hosting nahi hai (Ultra Pro lo)" };
         }
       });

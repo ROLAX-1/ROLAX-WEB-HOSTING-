@@ -8,7 +8,7 @@ export type Plan = {
   durationValue?: number;   // jaise 3
   durationUnit?: DurationUnit; // "days" | "months" | "years"
   pricePerMonth?: boolean;  // price ko per-month treat karna hai (total = price x months)
-  entitlements?: Record<string, boolean>; // kaun se features is plan me milte hain
+  entitlements?: { [k: string]: boolean | undefined }; // kaun se features is plan me milte hain
   ram: string;
   cpu: string;
   storage: string;
@@ -69,12 +69,21 @@ export type CryptoWallet = {
   network: string;
 };
 
+export type FeatureDef = {
+  id: string;
+  label: string;
+  desc: string;
+  icon: string;
+  builtin?: boolean;
+};
+
 export type UserType = {
   id: string;
   name: string;
   email: string;
   planId?: string;
   planExpiry?: string;
+  entitlements?: { [k: string]: boolean | undefined }; // per-user override (admin panel se)
   status: "active" | "banned";
   createdAt: string;
 };
@@ -150,6 +159,21 @@ export type SiteSettings = {
   contactNote: string;
   usdToInr: number;
 };
+
+export const DEFAULT_FEATURES: FeatureDef[] = [
+  { id: "deploy", label: "Basic Deploy", desc: "File upload + site live", icon: "📦", builtin: true },
+  { id: "ai_autofix", label: "AI Auto-Fix", desc: "Code ke errors AI se khud fix (features nahi badalte)", icon: "🛠️", builtin: true },
+  { id: "ai_review", label: "AI Code Review", desc: "Uploaded code ka AI analysis report", icon: "🤖", builtin: true },
+  { id: "bot_24x7", label: "24/7 Bot Hosting", desc: "Plan khatam hone tak bot online", icon: "♾️", builtin: true },
+  { id: "custom_domain", label: "Custom Domain", desc: "Apna domain connect", icon: "🌐", builtin: true },
+  { id: "priority_support", label: "Priority Support", desc: "Telegram pe fast support", icon: "⚡", builtin: true },
+  { id: "daily_backup", label: "Daily Backup", desc: "Roz automatic backup", icon: "💾", builtin: true },
+  { id: "live_logs", label: "Live Logs", desc: "Real-time build/run logs", icon: "📜", builtin: true },
+  { id: "free_ssl", label: "Free SSL", desc: "HTTPS auto certificate", icon: "🔒", builtin: true },
+  { id: "analytics", label: "Traffic Analytics", desc: "Visitors + bandwidth stats", icon: "📊", builtin: true },
+  { id: "api_access", label: "API Access", desc: "Deploy via API token", icon: "🔑", builtin: true },
+  { id: "env_manager", label: "Env Variables Manager", desc: "Dashboard se env edit", icon: "🧪", builtin: true },
+];
 
 const defaultPlans: Plan[] = [
   {
@@ -327,6 +351,8 @@ function sanitizeWebsites(input: any): Website[] {
 }
 
 type Store = {
+  features: FeatureDef[];
+  setFeatures: (f: FeatureDef[]) => void;
   plans: Plan[];
   setPlans: (p: Plan[]) => void;
   stacks: Stack[];
@@ -348,6 +374,8 @@ type Store = {
 };
 
 export const useStore = create<Store>((set, get) => ({
+  features: DEFAULT_FEATURES,
+  setFeatures: (features) => { save("rolax_features", features); set({ features }); },
   plans: defaultPlans,
   stacks: defaultStacks,
   wallets: defaultWallets,
@@ -369,6 +397,24 @@ export const useStore = create<Store>((set, get) => ({
 
   hydrate: () => {
     if (get().hydrated) return;
+    if (typeof window !== "undefined") {
+      // admin panel change kare to doosre tab/page pe turant sync
+      if (!(window as any).__rolaxSyncBound) {
+        (window as any).__rolaxSyncBound = true;
+        const sync = () => {
+          const s = get() as any;
+          const next: any = {};
+          ["plans", "features", "settings", "websites", "payments", "tickets", "users", "stacks", "wallets"].forEach(k => {
+            const raw = localStorage.getItem("rolax_" + k);
+            if (raw) { try { next[k] = JSON.parse(raw); } catch {} }
+          });
+          if (Object.keys(next).length) set(next);
+        };
+        window.addEventListener("storage", sync);
+        window.addEventListener("focus", sync);
+        window.addEventListener("rolax:sync", sync);
+      }
+    }
     const plans = sanitizePlans(load<any>("rolax_plans", defaultPlans));
     const stacks = load<Stack[]>("rolax_stacks", defaultStacks);
     const wallets = sanitizeWallets(load<any>("rolax_wallets", defaultWallets));
@@ -382,6 +428,7 @@ export const useStore = create<Store>((set, get) => ({
     const payments = load<Payment[]>("rolax_payments", []);
     const tickets = load<Ticket[]>("rolax_tickets", []);
     const users = load<UserType[]>("rolax_users", []);
+    const features = load<FeatureDef[]>("rolax_features", DEFAULT_FEATURES);
     // seed dummy data if empty
     let seededWebsites = websites;
     let seededPayments = payments;
@@ -413,7 +460,7 @@ export const useStore = create<Store>((set, get) => ({
       ];
     }
 
-    set({ plans, stacks, wallets, settings, websites: seededWebsites, payments: seededPayments, tickets: seededTickets, users: seededUsers, hydrated: true });
+    set({ plans, stacks, wallets, settings, features: features.length ? features : DEFAULT_FEATURES, websites: seededWebsites, payments: seededPayments, tickets: seededTickets, users: seededUsers, hydrated: true });
     // persist seeds
     save("rolax_websites", seededWebsites);
     save("rolax_payments", seededPayments);

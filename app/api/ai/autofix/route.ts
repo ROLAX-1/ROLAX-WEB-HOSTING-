@@ -74,7 +74,11 @@ function localFixes(files: InFile[], checks: any[]): AiResult {
       }
     }
 
-    if (changed) fixes.push({ file: f.name, reason: reason.join("; "), code });
+    // safety: agar naya code me user ke commands/replies kam ho gaye to skip (features preserve)
+    const handlersOld = (f.content.match(/message_handler|onText|command\(|reply_to|sendMessage/g) || []).length;
+    const handlersNew = (code.match(/message_handler|onText|command\(|reply_to|sendMessage/g) || []).length;
+    if (changed && handlersNew >= handlersOld) fixes.push({ file: f.name, reason: reason.join("; "), code });
+    else if (changed) notes.push(`${f.name}: fix skip kiya kyunki features kam ho rahe the (safety guard).`);
   }
 
   if (needs("NO_REQUIREMENTS")) notes.push("requirements.txt auto-generate kiya ja sakta hai (auto-fix button).");

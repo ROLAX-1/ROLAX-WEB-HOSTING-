@@ -1,11 +1,31 @@
 "use client";
-import { useStore, durationLabel, planTotal } from "@/lib/store";
+import { useEffect, useState } from "react";
+import { useStore, durationLabel, planTotal, durationInDays } from "@/lib/store";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
 
 export default function Pricing() {
-  const { plans } = useStore();
+  const { plans, hydrate } = useStore();
+  // admin panel se plan change -> landing page turant update (same tab + dusre tab)
+  useEffect(() => {
+    hydrate();
+    const sync = () => {
+      try {
+        const raw = localStorage.getItem("rolax_plans");
+        if (raw) useStore.getState().setPlans(JSON.parse(raw));
+      } catch { /* ignore */ }
+    };
+    sync();
+    window.addEventListener("storage", sync);
+    window.addEventListener("focus", sync);
+    window.addEventListener("rolax:sync", sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("rolax:sync", sync);
+    };
+  }, [hydrate]);
 
   return (
     <section id="pricing" className="py-16 md:py-24 bg-black relative">

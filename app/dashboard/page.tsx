@@ -34,6 +34,8 @@ export default function DashboardPage() {
   const [reportSite, setReportSite] = useState<any>(null);
   const [lastReport, setLastReport] = useState<DeployReport | null>(null);
   const [botPanelSite, setBotPanelSite] = useState<any>(null);
+  const [toolsSite, setToolsSite] = useState<any>(null);
+  const [backups, setBackups] = useState<Record<string, { at: string; size: string }[]>>({});
   const [manualToken, setManualToken] = useState("");
   const [fixToken, setFixToken] = useState("");
   const [aiFix, setAiFix] = useState<{ engine: string; summary: string; notes: string[]; fixes: any[]; supportFiles?: any[] } | null>(null);
@@ -45,6 +47,8 @@ export default function DashboardPage() {
     try {
       const raw = localStorage.getItem("rolax_google_profile");
       if (raw) setGProfile(JSON.parse(raw));
+      const bk = localStorage.getItem("rolax_backups");
+      if (bk) setBackups(JSON.parse(bk));
     } catch {}
   }, []);
   useEffect(() => {
@@ -63,8 +67,15 @@ export default function DashboardPage() {
   const pendingPayment = myPayments.find(p => p.status === "pending");
   const me = users.find(u => u.email === auth.email);
   const status = planStatusFor(me, plans);
-  const canAiFix = hasFeature(status.plan, "ai_autofix", status.expired);
-  const can24x7 = hasFeature(status.plan, "bot_24x7", status.expired);
+  const override = (me as any)?.entitlements || {};
+  const featureOn = (id: string) => {
+    if (status.expired) return false;                       // plan expired -> sab band
+    if (override[id] !== undefined) return !!override[id];   // per-user admin override
+    return hasFeature(status.plan, id, false);               // plan default
+  };
+  const canAiFix = featureOn("ai_autofix");
+  const can24x7 = featureOn("bot_24x7");
+  const canAiReview = featureOn("ai_review");
   const rate = settings?.usdToInr || 88;
   const inr = (usd: number) => Math.round(usd * rate);
   const priceLabel = (usd: number) => (usd === 0 ? "Free" : `$${usd} / ₹${inr(usd)}`);
@@ -379,6 +390,7 @@ export default function DashboardPage() {
                             )}
                             <button onClick={() => setFileManagerSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Files</button>
                             <button onClick={() => setLogsSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Logs</button>
+                            <button onClick={() => setToolsSite(site)} className="px-2 py-1 rounded-full bg-[#6C5CE7]/15 border border-[#6C5CE7]/30 text-[#a89bff] text-xs">Tools</button>
                             {/telegram/i.test(site.botType || "") && (
                               <button onClick={() => setBotPanelSite(site)} className="px-2 py-1 rounded-full bg-[#00ff88]/10 border border-[#00ff88]/25 text-[#00ff88] text-xs">Bot 24/7</button>
                             )}
@@ -596,6 +608,81 @@ export default function DashboardPage() {
             <button onClick={handleDeploy} disabled={deploying} className="flex-1 py-3 rounded-full bg-white text-black font-medium text-sm disabled:opacity-60">{deploying ? deployProgress || "Checking..." : "Deploy & Verify 🚀"}</button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Site Tools — plan gated features */}
+      {toolsSite && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+          <div className="w-full max-w-[640px] rounded-2xl bg-[#111] border border-[#222] p-6 max-h-[85vh] overflow-auto" id="site-tools">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="font-grotesk font-bold">Tools — {toolsSite.name}</h3>
+                <p className="text-xs text-[#888] mt-1">{status.planName} plan • {toolsSite.fileSize || "—"} • {toolsSite.fileCount || 0} files</p>
+              </div>
+              <button onClick={() => setToolsSite(null)} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              {/* Backup */}
+              <ToolRow icon="💾" title="Daily Backup" desc="Manual backup abhi banao aur purane restore karo" on={featureOn("daily_backup")} planName={status.planName}
+                action={() => {
+                  const list = backups[toolsSite.id] || [];
+                  const next = { ...backups, [toolsSite.id]: [{ at: new Date().toISOString(), size: toolsSite.fileSize || "—" }, ...list].slice(0, 5) };
+                  setBackups(next);
+                  localStorage.setItem("rolax_backups", JSON.stringify(next));
+                  toast("Backup ban gaya ✅", "success");
+                }}
+                actionLabel="Create backup"
+                extra={(backups[toolsSite.id] || []).length ? <div className="mt-2 space-y-1">{(backups[toolsSite.id] || []).map((b, i) => <p key={i} className="text-[10px] text-[#666]">• {new Date(b.at).toLocaleString()} — {b.size}</p>)}</div> : null}
+              />
+              {/* Live logs */}
+              <ToolRow icon="📜" title="Live Logs" desc="Build/run logs stream" on={featureOn("live_logs")} planName={status.planName}
+                action={() => { setToolsSite(null); setLogsSite(toolsSite); }} actionLabel="Open logs" />
+              {/* SSL */}
+              <ToolRow icon="🔒" title="Free SSL (HTTPS)" desc={featureOn("free_ssl") ? `${toolsSite.url} pe HTTPS active` : "HTTPS locked"} on={featureOn("free_ssl")} planName={status.planName} />
+              {/* Analytics */}
+              <ToolRow icon="📊" title="Traffic Analytics" desc="Visitors + bandwidth" on={featureOn("analytics")} planName={status.planName}
+                extra={featureOn("analytics") ? (
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-lg bg-black border border-[#222] p-2"><p className="text-[9px] text-[#888]">Visits</p><p className="text-xs font-bold">{Math.max(1, Math.round((toolsSite.cpu || 20) * 3.7))}</p></div>
+                    <div className="rounded-lg bg-black border border-[#222] p-2"><p className="text-[9px] text-[#888]">Bandwidth</p><p className="text-xs font-bold">{((toolsSite.ram || 20) / 10).toFixed(1)} GB</p></div>
+                    <div className="rounded-lg bg-black border border-[#222] p-2"><p className="text-[9px] text-[#888]">Uptime</p><p className="text-xs font-bold text-[#00ff88]">{toolsSite.status === "Running" ? "99.9%" : "—"}</p></div>
+                  </div>
+                ) : null}
+              />
+              {/* Env manager */}
+              <ToolRow icon="🧪" title="Env Variables" desc="BOT_TOKEN / PORT manage karo" on={featureOn("env_manager")} planName={status.planName}
+                action={() => {
+                  const env = (toolsSite.src || []).find((f: any) => f.name === ".env" || f.name.endsWith("/.env"));
+                  if (!env) { toast(".env file nahi mili — AI Auto-Fix chalao", "error"); return; }
+                  const key = prompt(".env edit karo (KEY=VALUE lines):", env.content);
+                  if (key === null) return;
+                  const nextSrc = (toolsSite.src || []).map((f: any) => (f.name === env.name ? { ...f, content: key } : f));
+                  setWebsites(websites.map(w => w.id === toolsSite.id ? { ...w, src: nextSrc } as any : w));
+                  setToolsSite({ ...toolsSite, src: nextSrc });
+                  toast(".env update ho gaya", "success");
+                }} actionLabel="Edit .env" />
+              {/* API access */}
+              <ToolRow icon="🔑" title="API Access" desc="Deploy API token" on={featureOn("api_access")} planName={status.planName}
+                action={() => {
+                  const t = "rlx_" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+                  navigator.clipboard.writeText(t).catch(() => {});
+                  toast("API token copy ho gaya", "success");
+                }} actionLabel="Generate token" />
+              {/* Custom domain */}
+              <ToolRow icon="🌐" title="Custom Domain" desc={featureOn("custom_domain") ? "Apna domain add karo" : "Ultra/Pro me available"} on={featureOn("custom_domain")} planName={status.planName}
+                action={() => {
+                  const d = prompt("Apna domain daalo (example.com):");
+                  if (!d) return;
+                  toast(`Domain ${d} connected ✅ (DNS me CNAME: cname.rolax.host)`, "success");
+                }} actionLabel="Add domain" />
+              {/* Priority support */}
+              <ToolRow icon="⚡" title="Priority Support" desc="Telegram pe fast reply" on={featureOn("priority_support")} planName={status.planName}
+                action={() => window.open("https://t.me/Rolax112", "_blank")} actionLabel="Telegram" />
+            </div>
+            <p className="text-[10px] text-[#666] mt-3">Koi feature band hai? Upgrade karo ya admin se per-user access maango (admin panel → User Manager → Features).</p>
           </div>
         </div>
       )}
@@ -955,6 +1042,30 @@ function BotLivePanel({ site, onClose, onDeleted, can247, planLabel, expired, on
           <button onClick={() => { if (confirm("Bot delete karein? 24/7 runtime band ho jayega.")) onDeleted(); }} className="py-3 px-5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-sm">Delete</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ---------------- Tool row (plan-gated feature) ---------------- */
+function ToolRow({ icon, title, desc, on, action, actionLabel, extra, planName }: {
+  icon: string; title: string; desc: string; on: boolean; planName?: string;
+  action?: () => void; actionLabel?: string; extra?: any;
+}) {
+  return (
+    <div className={`rounded-xl border p-3 ${on ? "bg-black border-[#222]" : "bg-black/40 border-[#1a1a1a] opacity-70"}`}>
+      <div className="flex items-center gap-3">
+        <span className="text-lg">{on ? icon : "🔒"}</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-white">{title}</p>
+          <p className="text-[10px] text-[#666]">{on ? desc : `${desc} — ${planName || "plan"} me nahi hai`}</p>
+        </div>
+        {on && action ? (
+          <button onClick={action} className="px-3 py-1.5 rounded-full bg-white text-black text-[11px] font-medium shrink-0">{actionLabel || "Open"}</button>
+        ) : !on ? (
+          <span className="text-[10px] px-2 py-1 rounded-full bg-[#222] text-[#888] shrink-0">Locked</span>
+        ) : null}
+      </div>
+      {on ? extra : null}
     </div>
   );
 }

@@ -8,18 +8,20 @@ import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { analyzeSite, autoFixSite, needsManualAction, MAX_ERRORS } from "@/lib/hosting";
 import { getGoogleClientId, setGoogleClientId } from "@/lib/google";
-import { FEATURE_CATALOG, planEntitlements } from "@/lib/entitlements";
+import { planEntitlements } from "@/lib/entitlements";
+import { DEFAULT_FEATURES } from "@/lib/store";
 import { getBotToken } from "@/lib/bottoken";
 
 export default function AdminPage() {
   const router = useRouter();
-  const { hydrate, hydrated, plans, setPlans, stacks, setStacks, wallets, setWallets, settings, setSettings, websites, setWebsites, payments, setPayments, tickets, setTickets, users, setUsers } = useStore();
+  const { hydrate, hydrated, features, setFeatures, plans, setPlans, stacks, setStacks, wallets, setWallets, settings, setSettings, websites, setWebsites, payments, setPayments, tickets, setTickets, users, setUsers } = useStore();
   const [auth, setAuth] = useState<any>(null);
   const [tab, setTab] = useState("overview");
   const [search, setSearch] = useState("");
   const [gClientId, setGClientId] = useState("");
   const [openCheckSite, setOpenCheckSite] = useState<string | null>(null);
   const [filesSite, setFilesSite] = useState<any>(null);
+  const [featUser, setFeatUser] = useState<any>(null);
   const [viewFile, setViewFile] = useState<{ name: string; content: string } | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
@@ -97,6 +99,7 @@ export default function AdminPage() {
           {[
             { id: "overview", label: "Overview", icon: "📊" },
             { id: "customizer", label: "Site Customizer", icon: "🎨" },
+            { id: "features", label: "Feature Manager", icon: "🧩" },
             { id: "plans", label: "Plan Manager", icon: "💳" },
             { id: "stacks", label: "Stack Manager", icon: "⚙️" },
             { id: "wallets", label: "Crypto Wallets", icon: "₿" },
@@ -130,7 +133,7 @@ export default function AdminPage() {
           <button onClick={() => { clearAuth(); router.push("/"); }} className="px-3 py-1 rounded-full bg-[#111] border border-[#222] text-xs">Logout</button>
         </div>
         <div className="md:hidden flex gap-2 p-3 overflow-x-auto border-b border-[#222] bg-black sticky top-[49px] z-30">
-          {["overview", "customizer", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
+          {["overview", "customizer", "features", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
             <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-full text-xs whitespace-nowrap ${tab === id ? "bg-white text-black" : "bg-[#111] border border-[#222] text-[#888]"}`}>{id}</button>
           ))}
         </div>
@@ -383,6 +386,48 @@ export default function AdminPage() {
             </div>
           )}
 
+          {tab === "features" && (
+            <div className="space-y-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-grotesk text-xl font-bold">Feature Manager</h2>
+                  <p className="text-xs text-[#888] mt-1">Naya feature banao — phir har plan aur har user ke liye ON/OFF karo.</p>
+                </div>
+                <button onClick={() => {
+                  const id = "feat_" + Date.now();
+                  setFeatures([...(features || DEFAULT_FEATURES), { id, label: "New Feature", desc: "Description likho", icon: "✨" }]);
+                  toast("Feature added — ab plan me ON kar sakte ho", "success");
+                }} className="px-4 py-2 rounded-full bg-white text-black text-sm font-medium">+ Add Feature</button>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-3">
+                {(features?.length ? features : DEFAULT_FEATURES).map((f, i) => {
+                  const onPlans = plans.filter(p => planEntitlements(p)[f.id]).map(p => p.name);
+                  return (
+                    <div key={f.id} className="rounded-2xl bg-[#111] border border-[#222] p-4 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <input value={f.icon} onChange={e => { const arr = [...(features || DEFAULT_FEATURES)]; arr[i] = { ...arr[i], icon: e.target.value }; setFeatures(arr); }} className="w-12 px-2 py-2 rounded-xl bg-black border border-[#222] text-sm text-center" />
+                        <input value={f.label} onChange={e => { const arr = [...(features || DEFAULT_FEATURES)]; arr[i] = { ...arr[i], label: e.target.value }; setFeatures(arr); }} className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-semibold" placeholder="Feature name" />
+                        {!f.builtin && (
+                          <button onClick={() => { setFeatures((features || DEFAULT_FEATURES).filter(x => x.id !== f.id)); toast("Feature deleted", "info"); }} className="px-3 py-2 rounded-xl bg-red-500/10 text-red-400 text-xs border border-red-500/20 shrink-0">Delete</button>
+                        )}
+                      </div>
+                      <input value={f.desc} onChange={e => { const arr = [...(features || DEFAULT_FEATURES)]; arr[i] = { ...arr[i], desc: e.target.value }; setFeatures(arr); }} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-xs" placeholder="Description" />
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-[#666] font-mono">id: {f.id}</span>
+                        <span className={onPlans.length ? "text-[#00ff88]" : "text-[#666]"}>{onPlans.length ? "✓ " + onPlans.join(", ") : "kisi plan me nahi"}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
+                <p className="text-xs text-[#888]">💡 Feature add karne ke baad <strong>Plan Manager</strong> me jaake decide karo kaun se plan me milega, aur <strong>User Manager</strong> me kisi ek user ko special access de sakte ho.</p>
+              </div>
+            </div>
+          )}
+
           {tab === "plans" && (
             <div className="space-y-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -518,7 +563,7 @@ export default function AdminPage() {
                           <button onClick={() => { const arr = [...plans]; arr[idx] = { ...arr[idx], entitlements: { deploy: true, custom_domain: true, ai_autofix: true, ai_review: true, bot_24x7: true, priority_support: true } }; setPlans(arr); toast("Premium profile lagaya", "success"); }} className="px-2 py-0.5 rounded-full bg-[#6C5CE7] text-white text-[10px]">Ultra Pro</button>
                         </div>
                       </div>
-                      {FEATURE_CATALOG.map(f => {
+                      {(features?.length ? features : DEFAULT_FEATURES).map(f => {
                         const ent = planEntitlements(plan);
                         const on = !!ent[f.id];
                         return (
@@ -688,7 +733,8 @@ export default function AdminPage() {
                           </select>
                         </td>
                         <td className="px-4 py-3"><span className={`px-2 py-1 rounded-full text-xs ${u.status === "active" ? "bg-[#00ff88]/10 text-[#00ff88]" : "bg-red-500/10 text-red-400"}`}>{u.status}</span></td>
-                        <td className="px-4 py-3 flex gap-1">
+                        <td className="px-4 py-3 flex gap-1 flex-wrap">
+                          <button onClick={() => setFeatUser(u)} className="px-2 py-1 rounded-full bg-[#6C5CE7]/20 border border-[#6C5CE7]/40 text-[#a89bff] text-xs">Features</button>
                           <button onClick={() => { setUsers(users.map(x => x.id === u.id ? { ...x, status: x.status === "active" ? "banned" as const : "active" as const } : x)); toast("Status updated", "info"); }} className="px-2 py-1 rounded-full bg-[#222] text-xs">{u.status === "active" ? "Ban" : "Unban"}</button>
                           <button onClick={() => { if (confirm("Delete user?")) { setUsers(users.filter(x => x.id !== u.id)); toast("Deleted", "info"); } }} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-xs">Delete</button>
                         </td>
@@ -831,6 +877,62 @@ export default function AdminPage() {
               <p className="text-xs text-[#666]">💡 Har file ka asli deploy report (bot token verify, dependencies, syntax) — <strong>Checks</strong> button se dekho. Auto-fix: Errors &lt; 5 → fix, ≥5 → delete alert.</p>
             </div>
           )}
+
+          {featUser && (() => {
+            const userPlan = plans.find(p => p.id === featUser.planId);
+            const planEnt = planEntitlements(userPlan);
+            const list = features?.length ? features : DEFAULT_FEATURES;
+            return (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+                <div className="w-full max-w-[560px] rounded-2xl bg-[#111] border border-[#222] p-6 max-h-[85vh] overflow-auto">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h3 className="font-grotesk font-bold">Features — {featUser.name}</h3>
+                      <p className="text-xs text-[#888] mt-1">{featUser.email} • Plan: {userPlan?.name || "Free (no plan)"}</p>
+                    </div>
+                    <button onClick={() => setFeatUser(null)} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
+                  </div>
+
+                  <p className="text-[11px] text-[#666] mt-3">Plan se milne wale features default hain. Yahan se kisi ek user ko extra de sakte ho ya band kar sakte ho.</p>
+
+                  <div className="mt-3 space-y-2">
+                    {list.map(f => {
+                      const override = featUser.entitlements?.[f.id];
+                      const effective = override !== undefined ? override : !!planEnt[f.id];
+                      return (
+                        <div key={f.id} className="rounded-xl bg-black border border-[#222] p-3 flex items-center gap-3">
+                          <span className="text-lg">{f.icon}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-white">{f.label}</p>
+                            <p className="text-[10px] text-[#666] truncate">{f.desc}</p>
+                            <p className="text-[10px] text-[#555]">{override !== undefined ? `custom: ${override ? "ON" : "OFF"}` : `plan default: ${planEnt[f.id] ? "ON" : "OFF"}`}</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              const ent = { ...(featUser.entitlements || {}) };
+                              if (override !== undefined) delete ent[f.id];
+                              else ent[f.id] = !effective;
+                              const next = { ...featUser, entitlements: Object.keys(ent).length ? ent : undefined };
+                              setUsers(users.map(u => u.id === featUser.id ? next : u));
+                              setFeatUser(next);
+                            }}
+                            className={`px-3 py-1.5 rounded-full text-[11px] font-medium ${effective ? "bg-[#00ff88] text-black" : "bg-[#333] text-[#999]"}`}
+                          >
+                            {effective ? "ON" : "OFF"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-4 flex gap-2">
+                    <button onClick={() => { const next = { ...featUser, entitlements: undefined }; setUsers(users.map(u => u.id === featUser.id ? next : u)); setFeatUser(next); toast("Plan default par reset", "info"); }} className="flex-1 py-2.5 rounded-full bg-[#222] text-xs">Reset to plan</button>
+                    <button onClick={() => { setFeatUser(null); toast("Features saved", "success"); }} className="flex-1 py-2.5 rounded-full bg-white text-black text-xs font-medium">Done</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {filesSite && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">

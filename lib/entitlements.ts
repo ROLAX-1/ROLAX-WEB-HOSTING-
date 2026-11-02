@@ -19,12 +19,12 @@ export const FEATURE_CATALOG: { id: FeatureId; label: string; desc: string; icon
   { id: "priority_support", label: "Priority Support", desc: "Telegram pe fast support", icon: "⚡" },
 ];
 
-export type Entitlements = Partial<Record<FeatureId, boolean>>;
+export type Entitlements = { [k: string]: boolean | undefined };
 
 export const DEFAULT_ENTITLEMENTS: Record<string, Entitlements> = {
-  free: { deploy: true, custom_domain: false, ai_autofix: false, ai_review: false, bot_24x7: false, priority_support: false },
-  pro: { deploy: true, ai_autofix: true, ai_review: true, bot_24x7: true, custom_domain: true, priority_support: true },
-  ultra: { deploy: true, ai_autofix: true, ai_review: true, bot_24x7: true, custom_domain: true, priority_support: true },
+  free: { deploy: true, custom_domain: false, ai_autofix: false, ai_review: false, bot_24x7: false, priority_support: false, daily_backup: false, live_logs: false, free_ssl: true, analytics: false, api_access: false, env_manager: false },
+  pro: { deploy: true, ai_autofix: true, ai_review: true, bot_24x7: true, custom_domain: true, priority_support: true, daily_backup: true, live_logs: true, free_ssl: true, analytics: true, api_access: false, env_manager: true },
+  ultra: { deploy: true, ai_autofix: true, ai_review: true, bot_24x7: true, custom_domain: true, priority_support: true, daily_backup: true, live_logs: true, free_ssl: true, analytics: true, api_access: true, env_manager: true },
 };
 
 export function planEntitlements(plan?: Plan | null): Entitlements {
@@ -37,7 +37,7 @@ export function planEntitlements(plan?: Plan | null): Entitlements {
   return DEFAULT_ENTITLEMENTS.pro;
 }
 
-export function hasFeature(plan: Plan | null | undefined, feature: FeatureId, expired = false): boolean {
+export function hasFeature(plan: Plan | null | undefined, feature: string, expired = false): boolean {
   if (expired) return false;
   return !!planEntitlements(plan)[feature];
 }
