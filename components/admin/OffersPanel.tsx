@@ -35,7 +35,26 @@ export default function OffersPanel() {
   };
 
   const update = (id: string, patch: Partial<Offer>) => persist(offers.map(o => o.id === id ? { ...o, ...patch } : o));
-  const remove = (id: string) => { if (confirm("Ye offer delete karna hai?")) { persist(offers.filter(o => o.id !== id)); toast("Offer delete ho gaya", "info"); } };
+  const [lastDeleted, setLastDeleted] = useState<{ offer: Offer; index: number } | null>(null);
+
+  const remove = (id: string) => {
+    const idx = offers.findIndex(o => o.id === id);
+    const gone = offers[idx];
+    if (!gone) return;
+    persist(offers.filter(o => o.id !== id));
+    setLastDeleted({ offer: gone, index: idx });
+    setOpenId(null);
+    toast("Offer delete ho gaya — Undo dabao wapas laane ke liye", "info");
+  };
+
+  const undoDelete = () => {
+    if (!lastDeleted) return;
+    const next = [...offers];
+    next.splice(Math.min(lastDeleted.index, next.length), 0, lastDeleted.offer);
+    persist(next);
+    setLastDeleted(null);
+    toast("Offer wapas aa gaya", "success");
+  };
   const duplicate = (o: Offer) => { const copy = { ...o, id: "of_" + Date.now(), title: o.title + " (copy)" }; persist([...offers, copy]); toast("Offer duplicate ho gaya", "success"); };
 
   const saveAll = () => {
@@ -53,7 +72,7 @@ export default function OffersPanel() {
       </div>
 
       <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
-        <p className="text-xs text-[#888] mb-2">1-click presets (jitne chahe add karo — 6, 8, 10...)</p>
+        <p className="text-xs text-[#888] mb-2">1-click presets (jitne chahe add karo — 6, 8, 10...) • har offer ke saamne 🗑 delete button hai</p>
         <div className="flex flex-wrap gap-2">
           {OFFER_PRESETS.map(p => (
             <button key={p.key} onClick={() => addPreset(p)} className="px-3 py-2 rounded-full bg-black border border-[#222] hover:border-white text-xs">{p.emoji} {p.name}</button>
@@ -83,6 +102,7 @@ export default function OffersPanel() {
                 </div>
                 <button onClick={() => update(o.id, { enabled: !o.enabled })} className={`px-2.5 py-1 rounded-full text-[10px] shrink-0 ${o.enabled ? "bg-[#00ff88]/15 text-[#00ff88]" : "bg-[#222] text-[#888]"}`}>{o.enabled ? "LIVE" : "OFF"}</button>
                 <button onClick={() => setOpenId(open ? null : o.id)} className="px-3 py-1 rounded-full bg-[#111] border border-[#222] text-[10px] shrink-0">{open ? "Close" : "Edit"}</button>
+                <button onClick={() => remove(o.id)} title="Offer delete karo" className="px-2.5 py-1 rounded-full bg-red-500/15 border border-red-500/30 text-red-400 text-[11px] font-semibold shrink-0">🗑 Delete</button>
               </div>
 
               {open && (
@@ -169,7 +189,7 @@ export default function OffersPanel() {
 
                   <div className="flex gap-2">
                     <button onClick={() => duplicate(o)} className="px-3 py-1.5 rounded-full bg-[#111] border border-[#222] text-[11px]">Duplicate</button>
-                    <button onClick={() => remove(o.id)} className="px-3 py-1.5 rounded-full bg-red-500/10 text-red-400 text-[11px]">Delete offer #{idx + 1}</button>
+                    <button onClick={() => remove(o.id)} className="px-4 py-1.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-400 text-[11px] font-medium">🗑 Delete this offer</button>
                   </div>
                 </div>
               )}
@@ -203,9 +223,17 @@ export default function OffersPanel() {
       </div>
 
       {/* sticky save */}
-      <div className="fixed bottom-0 left-0 right-0 md:left-[260px] z-50 bg-[#0a0a0f]/95 backdrop-blur border-t border-[#222] px-4 py-3 flex items-center justify-between gap-3">
-        <p className="text-[11px] text-[#888]">{offers.filter(o => o.enabled).length} live / {offers.length} total offers</p>
-        <button onClick={saveAll} className="px-6 py-2.5 rounded-full bg-white text-black text-sm font-semibold">💾 Save offers</button>
+      <div className="fixed bottom-0 left-0 right-0 md:left-[260px] z-40 bg-[#0a0a0f]/95 backdrop-blur border-t border-[#222] px-4 py-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] text-[#888]">{offers.filter(o => o.enabled).length} live / {offers.length} total offers</p>
+          {lastDeleted && (
+            <button onClick={undoDelete} className="text-[11px] text-[#FF8A00] underline">↩ Undo delete — {lastDeleted.offer.title}</button>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={() => { setOffers(getOffers(settings)); setLastDeleted(null); toast("Changes discard", "info"); }} className="px-4 py-2.5 rounded-full bg-[#111] border border-[#222] text-xs">Discard</button>
+          <button onClick={saveAll} className="px-6 py-2.5 rounded-full bg-white text-black text-sm font-semibold">💾 Save offers</button>
+        </div>
       </div>
     </div>
   );

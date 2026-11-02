@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
+import { useRef } from "react";
 import { useStore, ADMIN_EMAIL, DURATION_PRESETS, durationInDays, durationLabel, planTotal, type DurationUnit } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
@@ -29,9 +30,18 @@ export default function AdminPage() {
   const [viewFile, setViewFile] = useState<{ name: string; content: string } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<string>("");
+  const snapshot = useRef<string>("");
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { setGClientId(getGoogleClientId()); }, []);
+
+  // sach wala dirty tracking — pehli load pe snapshot banao, phir compare karo
+  useEffect(() => {
+    if (!hydrated) return;
+    const snap = JSON.stringify({ settings, plans, features, stacks, wallets });
+    if (!snapshot.current) { snapshot.current = snap; return; }
+    setDirty(snap !== snapshot.current);
+  }, [hydrated, settings, plans, features, stacks, wallets]);
   useEffect(() => {
     const a = getAuth();
     if (!a || a.email !== ADMIN_EMAIL) { router.push("/login"); return; }
@@ -39,6 +49,16 @@ export default function AdminPage() {
   }, [router]);
 
   if (!hydrated || !auth) return <div className="min-h-screen bg-black flex items-center justify-center text-[#888]">Loading admin...</div>;
+
+  const TAB_LABELS: Record<string, string> = {
+    overview: "Dashboard Overview", customizer: "Site Customizer", offers: "Offers & Festivals",
+    store: "Script Store", stats: "Stats & Accounts", features: "Feature Manager",
+    plans: "Plan Manager", stacks: "Stack Manager", wallets: "Crypto Wallets",
+    payments: "Payments", hosting: "Hosting Errors", users: "User Manager",
+    websites: "Website Manager", tickets: "Ticket Manager",
+  };
+
+  const currentSnapshot = () => JSON.stringify({ settings, plans, features, stacks, wallets });
 
   const saveEverything = () => {
     // sab kuch localStorage me forcibly likho (agar store miss hua ho to bhi)
@@ -51,11 +71,26 @@ export default function AdminPage() {
       localStorage.setItem("rolax_users", JSON.stringify(users));
       window.dispatchEvent(new CustomEvent("rolax:sync", { detail: { key: "all" } }));
       setSavedAt(new Date().toLocaleTimeString());
+      snapshot.current = currentSnapshot();
       setDirty(false);
       toast("✅ Sab settings save ho gayi — landing page pe turant live hai", "success");
     } catch {
       toast("Save fail — dobara try karo", "error");
     }
+  };
+
+  const discardChanges = () => {
+    if (!snapshot.current) return;
+    try {
+      const prev = JSON.parse(snapshot.current);
+      if (prev.settings) setSettings(prev.settings);
+      if (prev.plans) setPlans(prev.plans);
+      if (prev.features) setFeatures(prev.features);
+      if (prev.stacks) setStacks(prev.stacks);
+      if (prev.wallets) setWallets(prev.wallets);
+      setDirty(false);
+      toast("Changes discard — last saved state wapas", "info");
+    } catch {}
   };
 
   const revenue = payments.filter(p => p.status === "approved").reduce((sum, p) => sum + p.amount, 0);
@@ -165,15 +200,25 @@ export default function AdminPage() {
           ))}
         </div>
 
-        {/* SAVE BAR — har setting ke liye, logout ka koi risk nahi */}
+        {/* SAVE BAR — heading + sach wala dirty state */}
         <div style={{ top: "var(--banner-h, 0px)" }} className="sticky z-30 bg-[#0a0a0f]/95 backdrop-blur border-b border-[#222] px-4 md:px-8 py-2.5 flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium truncate">Admin — {tab}</p>
-            <p className="text-[10px] text-[#666]">{savedAt ? `Last saved ${savedAt}` : "Changes auto-save hote hain, phir bhi Save dabao"}</p>
+            <h1 className="font-grotesk text-sm md:text-base font-bold truncate">
+              {TAB_LABELS[tab] || tab}
+            </h1>
+            <p className="text-[10px] text-[#666] flex items-center gap-1.5">
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${dirty ? "bg-[#FF8A00]" : "bg-[#00ff88]"}`} />
+              {dirty ? "Unsaved changes hain — Save dabao" : savedAt ? `Saved ${savedAt}` : "Sab saved hai"}
+            </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button onClick={() => { setDirty(true); toast("Unsaved changes mark kiye", "info"); }} className="hidden md:inline px-3 py-1.5 rounded-full bg-[#111] border border-[#222] text-[11px]">Mark unsaved</button>
-            <button onClick={saveEverything} className={`px-4 py-2 rounded-full text-xs font-semibold ${dirty ? "bg-[#00ff88] text-black" : "bg-white text-black"}`}>💾 Save all settings</button>
+            {dirty && (
+              <button onClick={discardChanges} className="hidden md:inline px-3 py-1.5 rounded-full bg-[#111] border border-[#222] text-[11px] text-[#888]">Discard</button>
+            )}
+            <button
+              onClick={saveEverything}
+              className={`px-4 py-2 rounded-full text-xs font-semibold transition ${dirty ? "bg-[#00ff88] text-black shadow-[0_0_20px_rgba(0,255,136,0.35)]" : "bg-white text-black"}`}
+            >💾 Save</button>
             <button onClick={() => router.push("/")} className="hidden md:inline px-3 py-2 rounded-full bg-[#111] border border-[#222] text-xs">View site</button>
           </div>
         </div>
