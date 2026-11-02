@@ -139,7 +139,7 @@ export default function HostedSitePage() {
           <span className="px-2 py-0.5 rounded-full bg-[#00ff88]/15 text-[#00ff88] shrink-0">● live</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="hidden md:inline text-[#888]">hosted by ROLAX HOST</span>
+          <span className="hidden md:inline text-[#888]">hosted by {useStore.getState().settings.logoText}</span>
           <Link href="/dashboard" className="px-3 py-1 rounded-full bg-white text-black font-medium">Dashboard</Link>
         </div>
       </div>

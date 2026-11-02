@@ -1,4 +1,5 @@
 "use client";
+import { OfferBanner } from "@/components/OfferStrip";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
@@ -10,12 +11,17 @@ import { extractCommands } from "@/lib/botruntime";
 import { useBotStatus, restartBot } from "@/components/BotWorker";
 import { hasFeature, planStatusFor, planEntitlements } from "@/lib/entitlements";
 import { toast } from "@/components/ui/Toaster";
+import ScriptStorePanel from "@/components/ScriptStore";
+import { recordLogin } from "@/components/admin/StatsPanel";
+import Logo from "@/components/Logo";
 import Link from "next/link";
 
 export default function DashboardPage() {
   const router = useRouter();
   const { hydrate, hydrated, plans, stacks, wallets, settings, websites, setWebsites, payments, setPayments, tickets, setTickets, users } = useStore();
   const [auth, setAuth] = useState<any>(null);
+  const [coupon, setCoupon] = useState("");
+  const [couponOff, setCouponOff] = useState(0);
   const [tab, setTab] = useState("overview");
   const [showDeploy, setShowDeploy] = useState(false);
   const [deployData, setDeployData] = useState<{ name: string; stack: string; github: string; files: File[] }>({ name: "", stack: "HTML", github: "", files: [] });
@@ -43,6 +49,15 @@ export default function DashboardPage() {
   const [logsSite, setLogsSite] = useState<any>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
+
+  // login event record (admin stats ke liye)
+  useEffect(() => {
+    if (!auth) return;
+    const key = "rolax_login_" + auth.email + "_" + new Date().toDateString();
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, "1");
+    recordLogin({ userId: auth.id || "", email: auth.email, name: auth.name, method: (typeof window !== "undefined" && localStorage.getItem("rolax_auth_method") === "google") ? "google" : "email" });
+  }, [auth]);
   useEffect(() => {
     try {
       const raw = localStorage.getItem("rolax_google_profile");
@@ -155,6 +170,22 @@ export default function DashboardPage() {
     setTab("billing");
   };
 
+
+  const applyCoupon = () => {
+    const st: any = settings || {};
+    const code = (st.offerCode || "").toUpperCase();
+    if (!code || !st.offersEnabled) { toast("Abhi koi offer chalu nahi", "info"); return; }
+    if (coupon.trim().toUpperCase() !== code) { toast("Galat coupon code", "error"); return; }
+    if (st.offerEndsAt && new Date(st.offerEndsAt).getTime() < Date.now()) { toast("Offer khatam ho gaya", "error"); return; }
+    setCouponOff(Number(st.offerDiscount) || 0);
+    toast(`Coupon lag gaya — ${st.offerDiscount}% OFF 🎉`, "success");
+  };
+
+  const payable = () => {
+    const base = planTotal(selectedPlan as any);
+    return Number((base * (1 - couponOff / 100)).toFixed(2));
+  };
+
   const submitPayment = () => {
     if (!txid.trim()) { toast("Enter TXID/Hash", "error"); return; }
     const newPay = {
@@ -163,7 +194,9 @@ export default function DashboardPage() {
       userEmail: auth.email,
       planId: selectedPlan.id,
       planName: selectedPlan.name,
-      amount: planTotal(selectedPlan),
+      amount: payable(),
+      discount: couponOff,
+      coupon: couponOff ? coupon.trim().toUpperCase() : "",
       durationLabel: durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit),
       durationDays: durationInDays(selectedPlan.durationValue, selectedPlan.durationUnit),
       coin: payCoin,
@@ -198,18 +231,20 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-black text-white">
+      <OfferBanner />
       {/* Topbar */}
       <div className="sticky top-0 z-40 bg-black/80 backdrop-blur-xl border-b border-[#222]">
         <div className="max-w-7xl mx-auto px-4 md:px-6 h-[60px] flex items-center justify-between">
           <div className="flex items-center gap-6">
             <Link href="/" className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#6C5CE7] to-[#00D4FF] flex items-center justify-center font-bold text-sm">R</div>
-              <span className="font-grotesk font-bold">ROLAX HOST</span>
+              <Logo size={32} rounded="rounded-lg" />
+              <span className="font-grotesk font-bold">{settings.logoText}</span>
             </Link>
             <nav className="hidden md:flex items-center gap-1 ml-4">
               {[
                 { id: "overview", label: "Overview" },
                 { id: "sites", label: "My Websites" },
+                { id: "store", label: "Script Store" },
                 { id: "billing", label: "Billing" },
                 { id: "support", label: "Support" },
               ].map(item => (
@@ -228,7 +263,7 @@ export default function DashboardPage() {
         </div>
         {/* Mobile tabs */}
         <div className="md:hidden flex gap-1 px-4 pb-3 overflow-x-auto">
-          {["overview", "sites", "billing", "support"].map(id => (
+          {["overview", "sites", "store", "billing", "support"].map(id => (
             <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-full text-sm whitespace-nowrap ${tab === id ? "bg-white text-black" : "bg-[#111] border border-[#222] text-[#888]"}`}>{id}</button>
           ))}
         </div>
@@ -478,7 +513,8 @@ export default function DashboardPage() {
                       <div className="mt-3 p-3 rounded-xl bg-[#111] border border-[#222] flex justify-between items-center">
                         <div>
                           <p className="text-xs text-[#888]">Amount to Pay</p>
-                          <p className="text-white font-bold">{planTotal(selectedPlan)} {payCoin}</p>
+                          <p className="text-white font-bold">{payable()} {payCoin}</p>
+                          {couponOff > 0 && <p className="text-[10px] text-[#00ff88]">coupon {coupon} • {couponOff}% off</p>}
                           <p className="text-[10px] text-[#888]">Duration: {durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit)}</p>
                         </div>
                         <div className="text-right">
@@ -489,6 +525,17 @@ export default function DashboardPage() {
                       <p className="text-[11px] text-red-400 mt-3 bg-red-500/10 border border-red-500/20 rounded-lg p-2">⚠️ Only send on BEP-20 (BNB Smart Chain). Other networks will be lost forever!</p>
                       <p className="text-xs text-[#666] mt-2 text-center">Contact only on Telegram: <a href="https://t.me/Rolax112" target="_blank" className="text-[#00D4FF]">t.me/Rolax112</a></p>
                     </div>
+
+                    {(settings as any)?.offersEnabled && (
+                      <div className="rounded-2xl bg-[#111] border border-[#222] p-3">
+                        <label className="text-xs text-[#888]">🎟️ Coupon code (offer)</label>
+                        <div className="flex gap-2 mt-1">
+                          <input value={coupon} onChange={e => setCoupon(e.target.value.toUpperCase())} placeholder={(settings as any)?.offerCode || "DIWALI50"} className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-mono" />
+                          <button onClick={applyCoupon} className="px-4 py-2 rounded-xl bg-white text-black text-xs font-medium">Apply</button>
+                        </div>
+                        {couponOff > 0 && <p className="text-[11px] text-[#00ff88] mt-1">{couponOff}% OFF lag gaya — pay ${payable()} ({`was $${planTotal(selectedPlan as any)}`})</p>}
+                      </div>
+                    )}
 
                     <div>
                       <label className="text-xs text-[#888]">Transaction Hash / TXID</label>
@@ -509,6 +556,8 @@ export default function DashboardPage() {
             )}
           </div>
         )}
+
+        {tab === "store" && <ScriptStorePanel />}
 
         {tab === "support" && (
           <div className="space-y-6 max-w-3xl">

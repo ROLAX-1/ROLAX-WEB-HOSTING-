@@ -6,6 +6,7 @@ import Features from "@/components/Features";
 import Pricing from "@/components/Pricing";
 import FAQ from "@/components/FAQ";
 import Footer from "@/components/Footer";
+import OfferStrip, { OfferBanner } from "@/components/OfferStrip";
 import { useStore } from "@/lib/store";
 
 export default function Home() {
@@ -14,8 +15,10 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-black">
+      <OfferBanner />
       <Navbar />
       <Hero />
+      <OfferStrip />
       <Features />
       <Pricing />
       <FAQ />

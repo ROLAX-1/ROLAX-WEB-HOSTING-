@@ -1,4 +1,5 @@
 "use client";
+import Logo from "./Logo";
 import { useStore } from "@/lib/store";
 
 export default function Footer() {
@@ -9,7 +10,7 @@ export default function Footer() {
         <div className="grid md:grid-cols-4 gap-8 mb-8">
           <div>
             <div className="flex items-center gap-3 mb-3">
-              <img src="/images/rolax-hero-new.jpg" alt="ROLAX HOST" className="w-9 h-9 rounded-full object-cover border border-[#222] bg-black shadow-glow" />
+              <Logo size={36} />
               <span className="font-grotesk font-bold">{settings.logoText}</span>
             </div>
             <p className="text-sm text-[#888] leading-relaxed">{settings.footerText}</p>
@@ -43,8 +44,8 @@ export default function Footer() {
           </div>
         </div>
         <div className="pt-8 border-t border-[#222] flex flex-col md:flex-row justify-between gap-4 text-sm text-[#666]">
-          <span>© 2025 ROLAX HOST. All rights reserved. Contact only via Telegram.</span>
-          <span>Built with ❤️ • Hosted on ROLAX HOST</span>
+          <span>© {new Date().getFullYear()} {settings.logoText}. All rights reserved. Contact only via Telegram.</span>
+          <span>Built with ❤️ • Hosted on {settings.logoText}</span>
         </div>
       </div>
     </footer>

@@ -98,7 +98,7 @@ export default function GoogleSignIn({ label = "Continue with Google", onSuccess
             </div>
             <div className="p-5">
               <h3 className="text-base font-medium">Choose an account</h3>
-              <p className="text-xs text-[#5f6368] mt-1">to continue to <span className="font-medium text-[#202124]">ROLAX HOST</span></p>
+              <p className="text-xs text-[#5f6368] mt-1">to continue to <span className="font-medium text-[#202124]">{typeof window !== "undefined" ? JSON.parse(localStorage.getItem("rolax_settings")||"{}").logoText || "ROLAX HOST" : "ROLAX HOST"}</span></p>
 
               <div className="mt-4 space-y-3">
                 <div>

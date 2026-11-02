@@ -80,7 +80,7 @@ export default function Hero() {
         {/* Premium Hero Image - Single Large Cyber Showcase */}
         <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="mt-12 max-w-3xl mx-auto">
           <div className="relative rounded-[2rem] overflow-hidden bg-black border border-[#222] p-2 md:p-3 shadow-2xl">
-            <img src="/images/rolax-hero-new.jpg" alt="ROLAX HOST Premium Cyber Hosting" className="w-full h-[380px] md:h-[480px] object-cover rounded-[1.5rem]" />
+            <img src={settings?.heroImageUrl || settings?.logoUrl || "/images/rolax-hero-new.jpg"} alt={settings?.logoText || "ROLAX HOST"} className="w-full h-[380px] md:h-[480px] object-cover rounded-[1.5rem]" />
             <div className="absolute inset-2 md:inset-3 rounded-[1.5rem] bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
             <div className="absolute bottom-6 left-6 right-6 flex flex-wrap gap-2">
               <span className="px-3 py-1 rounded-full bg-black/70 backdrop-blur border border-[#222] text-xs text-white">Elite Hosting</span>

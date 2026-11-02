@@ -12,6 +12,9 @@ import { planEntitlements } from "@/lib/entitlements";
 import { DEFAULT_FEATURES } from "@/lib/store";
 import { getBotToken } from "@/lib/bottoken";
 import { analyzeProject } from "@/lib/aianalyze";
+import OffersPanel from "@/components/admin/OffersPanel";
+import ScriptStorePanel from "@/components/admin/ScriptStorePanel";
+import StatsPanel from "@/components/admin/StatsPanel";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -91,7 +94,7 @@ export default function AdminPage() {
         <div className="p-6">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#6C5CE7] to-[#00D4FF] flex items-center justify-center font-bold text-sm">R</div>
-            <span className="font-grotesk font-bold">ROLAX ADMIN</span>
+            <span className="font-grotesk font-bold">{settings.logoText} ADMIN</span>
           </div>
           <p className="text-xs text-[#666] mt-1">Super Admin Panel</p>
         </div>
@@ -100,6 +103,9 @@ export default function AdminPage() {
           {[
             { id: "overview", label: "Overview", icon: "📊" },
             { id: "customizer", label: "Site Customizer", icon: "🎨" },
+            { id: "offers", label: "Offers & Festivals", icon: "🎉" },
+            { id: "store", label: "Script Store", icon: "🛒" },
+            { id: "stats", label: "Stats & Accounts", icon: "📊" },
             { id: "features", label: "Feature Manager", icon: "🧩" },
             { id: "plans", label: "Plan Manager", icon: "💳" },
             { id: "stacks", label: "Stack Manager", icon: "⚙️" },
@@ -130,11 +136,11 @@ export default function AdminPage() {
       <div className="flex-1 min-w-0">
         {/* Topbar Mobile */}
         <div className="md:hidden sticky top-0 z-40 bg-black border-b border-[#222] p-3 flex items-center justify-between">
-          <span className="font-grotesk font-bold">ROLAX ADMIN</span>
+          <span className="font-grotesk font-bold">{settings.logoText} ADMIN</span>
           <button onClick={() => { clearAuth(); router.push("/"); }} className="px-3 py-1 rounded-full bg-[#111] border border-[#222] text-xs">Logout</button>
         </div>
         <div className="md:hidden flex gap-2 p-3 overflow-x-auto border-b border-[#222] bg-black sticky top-[49px] z-30">
-          {["overview", "customizer", "features", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
+          {["overview", "customizer", "offers", "store", "stats", "features", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
             <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-full text-xs whitespace-nowrap ${tab === id ? "bg-white text-black" : "bg-[#111] border border-[#222] text-[#888]"}`}>{id}</button>
           ))}
         </div>
@@ -311,6 +317,10 @@ export default function AdminPage() {
             </div>
           )}
 
+          {tab === "offers" && <OffersPanel />}
+          {tab === "store" && <ScriptStorePanel />}
+          {tab === "stats" && <StatsPanel />}
+
           {tab === "customizer" && (
             <div className="space-y-6 max-w-3xl">
               <h2 className="font-grotesk text-xl font-bold">Site Customizer</h2>
@@ -332,6 +342,46 @@ export default function AdminPage() {
                   <input value={(settings as any)[field.key]} onChange={e => setSettings({ ...settings, [field.key]: e.target.value })} className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm" />
                 </div>
               ))}
+
+              {/* ===== BRAND: logo image + favicon ek jagah se ===== */}
+              <div className="rounded-2xl bg-[#111] border border-[#222] p-4 space-y-3">
+                <h4 className="text-sm font-semibold">🖼️ Logo & Brand (ek jagah se poori site)</h4>
+                <div className="flex items-center gap-3">
+                  <img src={(settings as any).logoUrl || "/images/rolax-hero-new.jpg"} alt="logo" className="w-14 h-14 rounded-full object-cover border border-[#222] bg-black" />
+                  <div className="flex-1">
+                    <label className="text-[11px] text-[#888]">Logo upload (PNG/JPG/SVG — 1MB tak)</label>
+                    <input type="file" accept="image/*" onChange={async e => {
+                      const f = e.target.files?.[0]; if (!f) return;
+                      if (f.size > 1024 * 1024) { toast("1MB se chhoti image chuno", "error"); return; }
+                      const r = new FileReader();
+                      r.onload = () => { setSettings({ ...settings, logoUrl: String(r.result) }); toast("Logo set ho gaya — Save dabao", "success"); };
+                      r.readAsDataURL(f);
+                    }} className="mt-1 w-full text-[11px] file:mr-2 file:px-3 file:py-1 file:rounded-full file:bg-white file:text-black file:border-0 text-[#888]" />
+                  </div>
+                </div>
+                <input value={(settings as any).logoUrl || ""} onChange={e => setSettings({ ...settings, logoUrl: e.target.value })} placeholder="ya image URL paste karo" className="w-full px-4 py-2 rounded-xl bg-black border border-[#222] text-xs font-mono" />
+                <div>
+                  <label className="text-[11px] text-[#888]">Hero image (landing page badi image)</label>
+                  <div className="flex gap-2">
+                    <input value={(settings as any).heroImageUrl || ""} onChange={e => setSettings({ ...settings, heroImageUrl: e.target.value })} placeholder="/images/rolax-hero-new.jpg" className="flex-1 px-4 py-2 rounded-xl bg-black border border-[#222] text-xs font-mono" />
+                    <input type="file" accept="image/*" onChange={async e => {
+                      const f = e.target.files?.[0]; if (!f) return;
+                      const r = new FileReader();
+                      r.onload = () => { setSettings({ ...settings, heroImageUrl: String(r.result) }); toast("Hero image set — Save dabao", "success"); };
+                      r.readAsDataURL(f);
+                    }} className="w-32 text-[10px] file:px-2 file:py-1 file:rounded-full file:bg-white file:text-black file:border-0 text-[#888]" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] text-[#888]">Accent color</label>
+                  <div className="flex gap-2 items-center">
+                    <input type="color" value={(settings as any).accentColor || "#6C5CE7"} onChange={e => setSettings({ ...settings, accentColor: e.target.value })} className="w-12 h-9 rounded-lg bg-black border border-[#222]" />
+                    <input value={(settings as any).accentColor || "#6C5CE7"} onChange={e => setSettings({ ...settings, accentColor: e.target.value })} className="w-32 px-3 py-2 rounded-lg bg-black border border-[#222] text-xs font-mono" />
+                    <button onClick={() => { setSettings({ ...settings, logoUrl: "/images/rolax-hero-new.jpg", heroImageUrl: "/images/rolax-hero-new.jpg", accentColor: "#6C5CE7" }); toast("Default brand wapas", "info"); }} className="px-3 py-2 rounded-full bg-[#111] border border-[#222] text-[11px]">Reset brand</button>
+                  </div>
+                </div>
+                <p className="text-[10px] text-[#666]">Logo + naam puri site pe badal jayega: navbar, footer, hero, dashboard. Sab jagah automatic.</p>
+              </div>
 
               <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
                 <label className="text-xs text-[#888]">Google Sign-In Client ID (optional)</label>

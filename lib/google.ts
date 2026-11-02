@@ -102,6 +102,8 @@ export async function renderGoogleButton(
 
 /** Google profile se local session banao (shared by both modes) */
 export function finishGoogleLogin(profile: GoogleProfile, adminEmail: string) {
+  try { if (typeof window !== "undefined") { localStorage.setItem("rolax_auth_method", "google"); const lg = JSON.parse(localStorage.getItem("rolax_logins") || "[]"); lg.push({ id: "lg_" + Date.now(), userId: "", email: (arguments as any)[0]?.email || "", name: (arguments as any)[0]?.name || "", method: "google", at: new Date().toISOString() }); localStorage.setItem("rolax_logins", JSON.stringify(lg.slice(-500))); } } catch {}
+
   const isAdmin = profile.email.toLowerCase() === adminEmail.toLowerCase();
   const id = (profile.sub || "g_" + profile.email).slice(0, 40);
   setAuth({ id, name: profile.name, email: profile.email, isAdmin });

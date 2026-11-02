@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { setAuth, getAuth } from "@/lib/auth";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, useStore } from "@/lib/store";
+import { recordLogin } from "@/components/admin/StatsPanel";
 import { toast } from "@/components/ui/Toaster";
 import GoogleSignIn from "@/components/GoogleSignIn";
 import type { GoogleProfile } from "@/lib/google";
@@ -29,6 +30,8 @@ export default function LoginPage() {
     setTimeout(() => {
       // Check admin credentials
       if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+        localStorage.setItem("rolax_auth_method", "email");
+        recordLogin({ userId: "admin_001", email, name: "ROLAX Admin", method: "email" });
         setAuth({ id: "admin_001", name: "ROLAX Admin", email, isAdmin: true });
         toast("Welcome back, Admin!", "success");
         router.push("/admin");
@@ -49,6 +52,8 @@ export default function LoginPage() {
           if (regFound || found) {
             const name = regFound?.name || found?.name || email.split("@")[0];
             // Simple password validation: if regFound exists, password already matched. If only in users list, accept.
+            localStorage.setItem("rolax_auth_method", "email");
+            recordLogin({ userId: found?.id || regFound?.id || "", email, name, method: "email" });
             setAuth({ id: found?.id || regFound?.id || "u_" + Date.now(), name, email, isAdmin: false });
             toast("Login successful!", "success");
             router.push("/dashboard");
@@ -64,6 +69,8 @@ export default function LoginPage() {
             setLoading(false);
             return;
           }
+          localStorage.setItem("rolax_auth_method", "email");
+          recordLogin({ userId: "", email, name: email.split("@")[0], method: "email" });
           setAuth({ id: "u_" + Date.now(), name: email.split("@")[0], email, isAdmin: false });
           toast("Login successful!", "success");
           router.push("/dashboard");
@@ -86,7 +93,7 @@ export default function LoginPage() {
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="relative w-full max-w-[420px]">
         <Link href="/" className="flex items-center justify-center gap-2 mb-8">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#6C5CE7] to-[#00D4FF] flex items-center justify-center font-bold text-sm">R</div>
-          <span className="font-grotesk font-bold text-lg">ROLAX HOST</span>
+          <span className="font-grotesk font-bold text-lg">{useStore.getState().settings.logoText}</span>
         </Link>
 
         <div className="rounded-2xl bg-[#111] border border-[#222] p-6 md:p-8 shadow-2xl">

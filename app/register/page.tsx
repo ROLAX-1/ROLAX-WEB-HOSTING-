@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { setAuth } from "@/lib/auth";
+import { recordLogin } from "@/components/admin/StatsPanel";
 import { useStore } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
 import GoogleSignIn from "@/components/GoogleSignIn";
@@ -52,6 +53,8 @@ export default function RegisterPage() {
         users.push({ id: newUser.id, name, email, status: "active", createdAt: newUser.createdAt });
         localStorage.setItem("rolax_users", JSON.stringify(users));
 
+        localStorage.setItem("rolax_auth_method", "email");
+        recordLogin({ userId: newUser.id, email, name, method: "email" });
         setAuth({ id: newUser.id, name, email, isAdmin: false });
         toast("Account created successfully!", "success");
         router.push("/dashboard");
@@ -71,7 +74,7 @@ export default function RegisterPage() {
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="relative w-full max-w-[440px]">
         <Link href="/" className="flex items-center justify-center gap-2 mb-8">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#6C5CE7] to-[#00D4FF] flex items-center justify-center font-bold text-sm">R</div>
-          <span className="font-grotesk font-bold text-lg">ROLAX HOST</span>
+          <span className="font-grotesk font-bold text-lg">{useStore.getState().settings.logoText}</span>
         </Link>
 
         <div className="rounded-2xl bg-[#111] border border-[#222] p-6 md:p-8 shadow-2xl">

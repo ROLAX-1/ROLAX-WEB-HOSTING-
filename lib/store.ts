@@ -158,6 +158,25 @@ export type SiteSettings = {
   contactTelegram: string;
   contactNote: string;
   usdToInr: number;
+  /* brand — ek jagah se poori site */
+  logoUrl?: string;
+  faviconUrl?: string;
+  accentColor?: string;
+  footerLogoUrl?: string;
+  heroImageUrl?: string;
+  /* offers / festival */
+  offersEnabled?: boolean;
+  offerBadge?: string;
+  offerTitle?: string;
+  offerDesc?: string;
+  offerCode?: string;
+  offerDiscount?: number;
+  offerEndsAt?: string;
+  offerTheme?: string;
+  offerPlans?: string[];
+  offerBannerEnabled?: boolean;
+  offerBannerText?: string;
+  announcements?: { id: string; text: string; emoji?: string; active: boolean }[];
 };
 
 export const DEFAULT_FEATURES: FeatureDef[] = [
@@ -228,6 +247,22 @@ const defaultWallets: CryptoWallet[] = [
 
 const defaultSettings: SiteSettings = {
   logoText: "ROLAX HOST",
+  logoUrl: "/images/rolax-hero-new.jpg",
+  faviconUrl: "",
+  accentColor: "#6C5CE7",
+  heroImageUrl: "/images/rolax-hero-new.jpg",
+  offersEnabled: false,
+  offerBadge: "🪔 DIWALI DHAMAKA",
+  offerTitle: "Diwali Special — 50% OFF",
+  offerDesc: "Har plan pe flat 50% off. Sirf Diwali tak!",
+  offerCode: "DIWALI50",
+  offerDiscount: 50,
+  offerEndsAt: "",
+  offerTheme: "diwali",
+  offerPlans: [],
+  offerBannerEnabled: false,
+  offerBannerText: "🪔 Diwali Sale LIVE — coupon DIWALI50 se 50% OFF",
+  announcements: [],
   heroTitle: "Host Python, Node.js & HTML at Lightning Speed",
   heroSubtitle: "Deploy your projects in seconds. 99.9% uptime, global CDN, and developer-first experience trusted by 50,000+ developers worldwide.",
   heroBadge: "⚡ Now with 10x faster deployments",
