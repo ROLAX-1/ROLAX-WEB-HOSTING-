@@ -171,6 +171,7 @@ export default function RunPage() {
   const [ready, setReady] = useState(false);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [detected, setDetected] = useState<string[]>([]);
   const pyodide = useRef<any>(null);
   const outRef = useRef<HTMLDivElement | null>(null);
 
@@ -215,8 +216,11 @@ export default function RunPage() {
         const warn = String(info).includes("WARN:") ? String(info).split("WARN:")[1]?.split("\n")[0] : "";
         push("sys", `Bot code load ho gaya — entry: ${entry}`);
         if (warn) push("err", "load warning: " + warn);
-        const cmds = String(info).match(/COMMANDS (\[[^\]]*\])/)?.[1] || "[]";
-        push("sys", `Commands: ${cmds} — try karo /start`);
+        const cmdsRaw = String(info).match(/COMMANDS (\[[^\]]*\])/)?.[1] || "[]";
+        let cmds: string[] = [];
+        try { cmds = JSON.parse(cmdsRaw); } catch {}
+        setDetected(cmds);
+        push("sys", cmds.length ? `Detected commands: ${cmds.map(c => "/" + c).join(" ")}` : "Code me koi command handler nahi mila — default /start /help /price /status try karo");
         setTimeout(() => runCommand("/start"), 400);
       } catch (e: any) {
         setError(e?.message || "Python runtime start nahi hua");
@@ -306,7 +310,7 @@ export default function RunPage() {
 
           {/* quick commands */}
           <div className="flex gap-2 flex-wrap">
-            {quick.map(q => (
+            {(detected.length ? detected.map(c => "/" + c) : quick).map(q => (
               <button key={q} onClick={() => runCommand(q)} disabled={!ready} className="px-3 py-1.5 rounded-full bg-[#111] border border-[#222] text-[11px] text-[#ccc] disabled:opacity-40">{q}</button>
             ))}
           </div>
