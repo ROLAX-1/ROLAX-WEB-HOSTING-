@@ -38,7 +38,7 @@ export default function DashboardPage() {
   const [backups, setBackups] = useState<Record<string, { at: string; size: string }[]>>({});
   const [manualToken, setManualToken] = useState("");
   const [fixToken, setFixToken] = useState("");
-  const [aiFix, setAiFix] = useState<{ engine: string; summary: string; notes: string[]; fixes: any[]; supportFiles?: any[] } | null>(null);
+  const [aiFix, setAiFix] = useState<{ engine: string; summary: string; notes: string[]; fixes: any[]; supportFiles?: any[]; guard?: any } | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [logsSite, setLogsSite] = useState<any>(null);
 
@@ -391,6 +391,9 @@ export default function DashboardPage() {
                             <button onClick={() => setFileManagerSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Files</button>
                             <button onClick={() => setLogsSite(site)} className="px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222] text-xs hover:bg-white hover:text-black transition">Logs</button>
                             <button onClick={() => setToolsSite(site)} className="px-2 py-1 rounded-full bg-[#6C5CE7]/15 border border-[#6C5CE7]/30 text-[#a89bff] text-xs">Tools</button>
+                            {/python/i.test(site.stack || site.fileType || "") && (
+                              <a href={`/run/${encodeURIComponent(site.name.toLowerCase().replace(/\s+/g, "-"))}`} target="_blank" className="px-2 py-1 rounded-full bg-[#00ff88]/15 border border-[#00ff88]/30 text-[#00ff88] text-xs">▶ Run</a>
+                            )}
                             {/telegram/i.test(site.botType || "") && (
                               <button onClick={() => setBotPanelSite(site)} className="px-2 py-1 rounded-full bg-[#00ff88]/10 border border-[#00ff88]/25 text-[#00ff88] text-xs">Bot 24/7</button>
                             )}
@@ -787,6 +790,9 @@ export default function DashboardPage() {
                   {aiFix.fixes.map((f: any, i: number) => (
                     <p key={i} className="text-[10px] text-[#888] mt-1">• {f.file} — {f.reason}</p>
                   ))}
+                  {(aiFix as any).guard?.rejected?.length ? (
+                    <p className="text-[10px] text-[#00ff88] mt-1">🛡️ Feature guard: {(aiFix as any).guard.rejected.join(", ")} ka fix reject kiya — koi feature change nahi hua.</p>
+                  ) : null}
                   {aiFix.supportFiles?.length ? (
                     <p className="text-[10px] text-[#00ff88] mt-1">📄 Generated: {aiFix.supportFiles.map((s: any) => s.file).join(", ")}</p>
                   ) : null}
@@ -842,8 +848,11 @@ export default function DashboardPage() {
               </button>
               <button onClick={() => { setErrorSite(reportSite); setReportSite(null); }} className="flex-1 min-w-[140px] py-3 rounded-full bg-[#222] border border-[#333] text-sm">Full Details</button>
               <button onClick={() => { setLogsSite(reportSite); setReportSite(null); }} className="flex-1 min-w-[120px] py-3 rounded-full bg-[#00D4FF]/10 border border-[#00D4FF]/20 text-[#00D4FF] text-sm">Logs</button>
-              {lastReport.ok && (
+              {lastReport.ok && lastReport.stack !== "Python" && (
                 <a href={`/site/${encodeURIComponent(reportSite.name.toLowerCase().replace(/\s+/g, "-"))}`} target="_blank" className="py-3 px-5 rounded-full bg-[#00ff88] text-black text-sm font-medium text-center">Open Site →</a>
+              )}
+              {(lastReport.stack === "Python" || /python/i.test(reportSite.stack || "")) && (
+                <a href={`/run/${encodeURIComponent(reportSite.name.toLowerCase().replace(/\s+/g, "-"))}`} target="_blank" className="py-3 px-5 rounded-full bg-[#00ff88] text-black text-sm font-medium text-center">▶ Run Python</a>
               )}
               {!lastReport.ok && (
                 <button onClick={() => { if (confirm("Delete this failed deploy?")) { setWebsites(websites.filter(x => x.id !== reportSite.id)); setReportSite(null); setLastReport(null); toast("Deleted", "info"); } }} className="py-3 px-5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-sm">Delete</button>

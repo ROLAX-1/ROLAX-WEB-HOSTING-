@@ -11,6 +11,7 @@ import { getGoogleClientId, setGoogleClientId } from "@/lib/google";
 import { planEntitlements } from "@/lib/entitlements";
 import { DEFAULT_FEATURES } from "@/lib/store";
 import { getBotToken } from "@/lib/bottoken";
+import { analyzeProject } from "@/lib/aianalyze";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -947,15 +948,27 @@ export default function AdminPage() {
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <button onClick={() => {
-                    const all = (filesSite.src || []).map((f: any) => `// ===== ${f.name} =====\n${f.content}`).join("\n\n");
-                    const blob = new Blob([all || `// no source\n// ${filesSite.name}`], { type: "text/plain" });
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `${filesSite.name}-source.txt`;
-                    a.click();
-                    toast("Downloaded source", "success");
-                  }} className="px-4 py-2 rounded-full bg-white text-black text-xs font-medium">⬇ Download all (txt)</button>
+                  <button onClick={async () => {
+                    const files = filesSite.src || [];
+                    if (!files.length) { toast("Is project ka source stored nahi hai", "error"); return; }
+                    try {
+                      const JSZip = (await import("jszip")).default;
+                      const zip = new JSZip();
+                      files.forEach((f: any) => zip.file(f.name, f.content));
+                      const blob = await zip.generateAsync({ type: "blob" });
+                      const a = document.createElement("a");
+                      a.href = URL.createObjectURL(blob);
+                      a.download = `${filesSite.name}.zip`;
+                      a.click();
+                      toast("Project ZIP download ho gaya ✅", "success");
+                    } catch {
+                      const all = files.map((f: any) => `// ===== ${f.name} =====\n${f.content}`).join("\n\n");
+                      const a = document.createElement("a");
+                      a.href = URL.createObjectURL(new Blob([all], { type: "text/plain" }));
+                      a.download = `${filesSite.name}-source.txt`;
+                      a.click();
+                    }
+                  }} className="px-4 py-2 rounded-full bg-white text-black text-xs font-medium">⬇ Download project (.zip)</button>
                   <button onClick={() => {
                     const all = (filesSite.src || []).map((f: any) => `===== ${f.name} =====\n${f.content}`).join("\n\n");
                     navigator.clipboard.writeText(all);
@@ -969,6 +982,59 @@ export default function AdminPage() {
                   }} className="px-4 py-2 rounded-full bg-[#00ff88]/15 border border-[#00ff88]/25 text-[#00ff88] text-xs">Copy bot token</button>
                   <a href={`/site/${encodeURIComponent(filesSite.name.toLowerCase().replace(/\s+/g, "-"))}`} target="_blank" className="px-4 py-2 rounded-full bg-[#00D4FF]/10 border border-[#00D4FF]/20 text-[#00D4FF] text-xs">Open site</a>
                 </div>
+
+                {/* AI ANALYSIS — kya host kiya, kya kaam karta hai */}
+                {(() => {
+                  const a = analyzeProject(filesSite);
+                  return (
+                    <div className="mt-3 rounded-xl bg-[#6C5CE7]/10 border border-[#6C5CE7]/30 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-[#a89bff]">🤖 AI Analysis</p>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#6C5CE7] text-white">{a.kind}</span>
+                      </div>
+                      <p className="text-[11px] text-[#ddd] mt-1">{a.summary}</p>
+
+                      <div className="mt-2 grid md:grid-cols-2 gap-2">
+                        <div className="rounded-lg bg-black border border-[#222] p-2">
+                          <p className="text-[10px] text-[#888] mb-1">Kya kaam karta hai</p>
+                          {a.runs.map((r, i) => <p key={i} className="text-[10px] text-[#00ff88]">✓ {r}</p>)}
+                        </div>
+                        <div className="rounded-lg bg-black border border-[#222] p-2">
+                          <p className="text-[10px] text-[#888] mb-1">Files / Stack</p>
+                          <p className="text-[10px] text-[#ccc]">{a.stack} • {a.files.length} files • {a.lineCount} lines</p>
+                          <p className="text-[10px] text-[#666] break-words">{a.files.slice(0, 8).join(", ")}</p>
+                          {a.packages.length > 0 && <p className="text-[10px] text-[#00D4FF] mt-1">📦 {a.packages.slice(0, 6).join(", ")}</p>}
+                        </div>
+                      </div>
+
+                      {a.commands.length > 0 && (
+                        <div className="mt-2 rounded-lg bg-black border border-[#222] p-2">
+                          <p className="text-[10px] text-[#888] mb-1">Telegram commands ({a.commands.length})</p>
+                          {a.commands.slice(0, 6).map((c, i) => (
+                            <p key={i} className="text-[10px] text-[#ccc]"><span className="text-[#00D4FF]">/{c.trigger}</span>{c.reply ? ` → ${c.reply.slice(0, 55)}` : ""}</p>
+                          ))}
+                        </div>
+                      )}
+
+                      {a.routes.length > 0 && (
+                        <div className="mt-2 rounded-lg bg-black border border-[#222] p-2">
+                          <p className="text-[10px] text-[#888]">Web routes: <span className="text-[#ccc]">{a.routes.join(", ")}</span></p>
+                        </div>
+                      )}
+
+                      {a.envKeys.length > 0 && (
+                        <p className="text-[10px] text-[#888] mt-2">🔑 Env keys: <span className="text-[#ccc]">{a.envKeys.join(", ")}</span></p>
+                      )}
+
+                      {a.riskFlags.length > 0 && (
+                        <div className="mt-2 rounded-lg bg-red-500/10 border border-red-500/25 p-2">
+                          <p className="text-[10px] text-red-300 font-medium">⚠ Risk flags</p>
+                          {a.riskFlags.map((r, i) => <p key={i} className="text-[10px] text-red-200/80">• {r}</p>)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div className="mt-4 grid md:grid-cols-[260px_1fr] gap-3">
                   <div className="rounded-xl bg-black border border-[#222] p-2 max-h-[45vh] overflow-auto">

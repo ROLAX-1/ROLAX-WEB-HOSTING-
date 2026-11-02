@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateSupportFiles, mergeSupportFiles, type SourceFile } from "@/lib/supportfiles";
+import { guardFiles, isSupportFile } from "@/lib/featureguard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -162,6 +163,27 @@ export async function POST(req: NextRequest) {
     result.notes = [...(ai.notes || []), ...fallback.notes];
   }
 
+  // ---- FEATURE LOCK GUARD: user ke features kabhi change nahi honge ----
+  const proposed: SourceFile[] = files.map(f => {
+    const patch = result.fixes.find(x => x.file === f.name || x.file.endsWith("/" + f.name) || f.name.endsWith("/" + x.file));
+    return patch && !isSupportFile(f.name) ? { name: f.name, content: patch.code } : { name: f.name, content: f.content };
+  });
+  const guard = guardFiles(files.map(f => ({ name: f.name, content: f.content })), proposed);
+  if (!guard.ok) {
+    // jis file me feature loss hua, uska AI fix hata do (original rakho)
+    result.fixes = result.fixes.filter(f => {
+      if (isSupportFile(f.file)) return true;
+      const lostThis = guard.details.some(d => d.startsWith(f.file));
+      return !lostThis;
+    });
+    result.notes = [
+      ...(result.notes || []),
+      `🛡️ Feature guard: ${guard.rejected.join(", ")} ka AI fix reject kiya gaya (features change ho rahe the) — original code safe hai.`,
+      ...guard.details,
+    ];
+    result.summary = `${result.summary} • 🛡️ features protected`;
+  }
+
   // ---- support files (requirements.txt / .env / package.json / Procfile / README) hamesha ----
   const support = generateSupportFiles(files as SourceFile[], body.stack || "", body.entryFile);
   const alreadyCovered = support.filter(s => result.fixes.some(f => f.file === s.file));
@@ -181,6 +203,7 @@ export async function POST(req: NextRequest) {
     fixes: result.fixes,
     notes: result.notes,
     supportFiles: support.map(s => ({ file: s.file, reason: s.reason })),
+    guard: { ok: guard.ok, rejected: guard.rejected, details: guard.details },
     aiAvailable: !!(process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY),
     at: new Date().toISOString(),
   });
