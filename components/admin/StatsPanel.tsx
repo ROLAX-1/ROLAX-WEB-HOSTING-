@@ -44,7 +44,7 @@ export default function StatsPanel() {
     const active30 = logins.filter(l => now - new Date(l.at).getTime() < 30 * 86400000);
     const googleUsers = new Set(logins.filter(l => l.method === "google").map(l => l.email));
     const emailUsers = new Set(logins.filter(l => l.method === "email").map(l => l.email));
-    const revenue = (payments || []).filter((p: any) => p.status === "paid" || p.status === "success").reduce((a: number, p: any) => a + (p.amount || 0), 0);
+    const revenue = (payments || []).filter((p: any) => ["paid", "success", "approved", "completed"].includes(String(p.status || "").toLowerCase())).reduce((a: number, p: any) => a + (p.amount || 0), 0);
     const planCounts = (plans || []).map(p => ({ ...p, count: (users || []).filter((u: any) => u.planId === p.id).length }));
     const expiring = (users || []).filter((u: any) => u.planExpiry && new Date(u.planExpiry).getTime() - now < 3 * 86400000 && new Date(u.planExpiry).getTime() > now);
     return {
