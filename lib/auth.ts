@@ -13,12 +13,22 @@ export function getAuth(): AuthUser | null {
   if (typeof window === "undefined") return null;
   try {
     const v = localStorage.getItem(AUTH_KEY);
-    return v ? JSON.parse(v) : null;
+    if (v) return JSON.parse(v);
+    // localStorage se gayab ho gaya? session backup se wapas lao
+    const backup = sessionStorage.getItem(AUTH_KEY);
+    if (backup) {
+      localStorage.setItem(AUTH_KEY, backup);
+      return JSON.parse(backup);
+    }
+    return null;
   } catch { return null; }
 }
 
 export function setAuth(user: AuthUser) {
-  localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+  const withStamp = { ...user, loggedInAt: new Date().toISOString() };
+  localStorage.setItem(AUTH_KEY, JSON.stringify(withStamp));
+  // session backup — refresh/close ke baad bhi admin logout na ho
+  try { sessionStorage.setItem(AUTH_KEY, JSON.stringify(withStamp)); } catch {}
   // also ensure user exists in users list
   try {
     const users = JSON.parse(localStorage.getItem("rolax_users") || "[]");
@@ -31,6 +41,7 @@ export function setAuth(user: AuthUser) {
 
 export function clearAuth() {
   localStorage.removeItem(AUTH_KEY);
+  try { sessionStorage.removeItem(AUTH_KEY); } catch {}
 }
 
 export function isAdminUser(user: AuthUser | null) {

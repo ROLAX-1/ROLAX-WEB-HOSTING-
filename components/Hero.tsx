@@ -7,7 +7,7 @@ export default function Hero() {
   const { settings } = useStore();
 
   return (
-    <section className="relative overflow-hidden pt-32 pb-16 md:pt-40 md:pb-24">
+    <section className="relative overflow-hidden pb-16 md:pb-24" style={{ paddingTop: "calc(var(--banner-h, 0px) + 6rem)" }}>
       {/* grid background */}
       <div className="absolute inset-0 grid-bg opacity-50" />
       {/* glow orbs */}

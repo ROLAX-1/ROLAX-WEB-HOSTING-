@@ -27,6 +27,8 @@ export default function AdminPage() {
   const [filesSite, setFilesSite] = useState<any>(null);
   const [featUser, setFeatUser] = useState<any>(null);
   const [viewFile, setViewFile] = useState<{ name: string; content: string } | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [savedAt, setSavedAt] = useState<string>("");
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { setGClientId(getGoogleClientId()); }, []);
@@ -37,6 +39,24 @@ export default function AdminPage() {
   }, [router]);
 
   if (!hydrated || !auth) return <div className="min-h-screen bg-black flex items-center justify-center text-[#888]">Loading admin...</div>;
+
+  const saveEverything = () => {
+    // sab kuch localStorage me forcibly likho (agar store miss hua ho to bhi)
+    try {
+      localStorage.setItem("rolax_settings", JSON.stringify(settings));
+      localStorage.setItem("rolax_plans", JSON.stringify(plans));
+      localStorage.setItem("rolax_features", JSON.stringify(features));
+      localStorage.setItem("rolax_stacks", JSON.stringify(stacks));
+      localStorage.setItem("rolax_wallets", JSON.stringify(wallets));
+      localStorage.setItem("rolax_users", JSON.stringify(users));
+      window.dispatchEvent(new CustomEvent("rolax:sync", { detail: { key: "all" } }));
+      setSavedAt(new Date().toLocaleTimeString());
+      setDirty(false);
+      toast("✅ Sab settings save ho gayi — landing page pe turant live hai", "success");
+    } catch {
+      toast("Save fail — dobara try karo", "error");
+    }
+  };
 
   const revenue = payments.filter(p => p.status === "approved").reduce((sum, p) => sum + p.amount, 0);
 
@@ -135,7 +155,7 @@ export default function AdminPage() {
       {/* Main */}
       <div className="flex-1 min-w-0">
         {/* Topbar Mobile */}
-        <div className="md:hidden sticky top-0 z-40 bg-black border-b border-[#222] p-3 flex items-center justify-between">
+        <div style={{ top: "var(--banner-h, 0px)" }} className="md:hidden sticky z-40 bg-black border-b border-[#222] p-3 flex items-center justify-between">
           <span className="font-grotesk font-bold">{settings.logoText} ADMIN</span>
           <button onClick={() => { clearAuth(); router.push("/"); }} className="px-3 py-1 rounded-full bg-[#111] border border-[#222] text-xs">Logout</button>
         </div>
@@ -143,6 +163,19 @@ export default function AdminPage() {
           {["overview", "customizer", "offers", "store", "stats", "features", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
             <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-full text-xs whitespace-nowrap ${tab === id ? "bg-white text-black" : "bg-[#111] border border-[#222] text-[#888]"}`}>{id}</button>
           ))}
+        </div>
+
+        {/* SAVE BAR — har setting ke liye, logout ka koi risk nahi */}
+        <div style={{ top: "var(--banner-h, 0px)" }} className="sticky z-30 bg-[#0a0a0f]/95 backdrop-blur border-b border-[#222] px-4 md:px-8 py-2.5 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium truncate">Admin — {tab}</p>
+            <p className="text-[10px] text-[#666]">{savedAt ? `Last saved ${savedAt}` : "Changes auto-save hote hain, phir bhi Save dabao"}</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={() => { setDirty(true); toast("Unsaved changes mark kiye", "info"); }} className="hidden md:inline px-3 py-1.5 rounded-full bg-[#111] border border-[#222] text-[11px]">Mark unsaved</button>
+            <button onClick={saveEverything} className={`px-4 py-2 rounded-full text-xs font-semibold ${dirty ? "bg-[#00ff88] text-black" : "bg-white text-black"}`}>💾 Save all settings</button>
+            <button onClick={() => router.push("/")} className="hidden md:inline px-3 py-2 rounded-full bg-[#111] border border-[#222] text-xs">View site</button>
+          </div>
         </div>
 
         <div className="p-4 md:p-8">

@@ -260,7 +260,7 @@ export default function RunPage() {
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col">
       {/* bar */}
-      <div className="sticky top-0 z-40 bg-black border-b border-[#222] px-4 py-2 flex items-center justify-between gap-3">
+      <div style={{ top: "var(--banner-h, 0px)" }} className="sticky z-40 bg-black border-b border-[#222] px-4 py-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-5 h-5 rounded bg-gradient-to-br from-[#6C5CE7] to-[#00D4FF] flex items-center justify-center font-bold text-[10px]">R</span>
           <span className="font-grotesk font-semibold text-sm truncate">{site?.name || "project"} — Python Runner</span>

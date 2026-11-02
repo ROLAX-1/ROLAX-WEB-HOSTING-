@@ -11,6 +11,7 @@ import { extractCommands } from "@/lib/botruntime";
 import { useBotStatus, restartBot } from "@/components/BotWorker";
 import { hasFeature, planStatusFor, planEntitlements } from "@/lib/entitlements";
 import { toast } from "@/components/ui/Toaster";
+import { getOffers, offerLive, findOfferByCode, applyOffer, offerLabel } from "@/lib/offers";
 import ScriptStorePanel from "@/components/ScriptStore";
 import { recordLogin } from "@/components/admin/StatsPanel";
 import Logo from "@/components/Logo";
@@ -22,6 +23,7 @@ export default function DashboardPage() {
   const [auth, setAuth] = useState<any>(null);
   const [coupon, setCoupon] = useState("");
   const [couponOff, setCouponOff] = useState(0);
+  const [appliedOffer, setAppliedOffer] = useState<any>(null);
   const [tab, setTab] = useState("overview");
   const [showDeploy, setShowDeploy] = useState(false);
   const [deployData, setDeployData] = useState<{ name: string; stack: string; github: string; files: File[] }>({ name: "", stack: "HTML", github: "", files: [] });
@@ -171,20 +173,22 @@ export default function DashboardPage() {
   };
 
 
+  const liveOffers = getOffers(settings).filter(offerLive);
+
   const applyCoupon = () => {
-    const st: any = settings || {};
-    const code = (st.offerCode || "").toUpperCase();
-    if (!code || !st.offersEnabled) { toast("Abhi koi offer chalu nahi", "info"); return; }
-    if (coupon.trim().toUpperCase() !== code) { toast("Galat coupon code", "error"); return; }
-    if (st.offerEndsAt && new Date(st.offerEndsAt).getTime() < Date.now()) { toast("Offer khatam ho gaya", "error"); return; }
-    setCouponOff(Number(st.offerDiscount) || 0);
-    toast(`Coupon lag gaya — ${st.offerDiscount}% OFF 🎉`, "success");
+    const found = findOfferByCode(liveOffers, coupon);
+    if (!found) {
+      // free offer bhi ho sakta hai — list dikha do
+      if (liveOffers.length) toast(`Galat code. Live codes: ${liveOffers.map(o => o.code).filter(Boolean).join(", ")}`, "error");
+      else toast("Abhi koi offer chalu nahi", "info");
+      return;
+    }
+    setAppliedOffer(found);
+    setCouponOff(found.type === "percent" ? Number(found.discount) || 0 : 0);
+    toast(`${offerLabel(found)} lag gaya 🎉${found.type === "freebie" ? " — gift milega" : ""}`, "success");
   };
 
-  const payable = () => {
-    const base = planTotal(selectedPlan as any);
-    return Number((base * (1 - couponOff / 100)).toFixed(2));
-  };
+  const payable = () => applyOffer(planTotal(selectedPlan as any), appliedOffer);
 
   const submitPayment = () => {
     if (!txid.trim()) { toast("Enter TXID/Hash", "error"); return; }
@@ -196,7 +200,9 @@ export default function DashboardPage() {
       planName: selectedPlan.name,
       amount: payable(),
       discount: couponOff,
-      coupon: couponOff ? coupon.trim().toUpperCase() : "",
+      coupon: appliedOffer ? (appliedOffer.code || "") : "",
+      offerType: appliedOffer?.type || "",
+      freebie: appliedOffer?.type === "freebie" ? appliedOffer.freebie : "",
       durationLabel: durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit),
       durationDays: durationInDays(selectedPlan.durationValue, selectedPlan.durationUnit),
       coin: payCoin,
@@ -233,7 +239,7 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-black text-white">
       <OfferBanner />
       {/* Topbar */}
-      <div className="sticky top-0 z-40 bg-black/80 backdrop-blur-xl border-b border-[#222]">
+      <div style={{ top: "var(--banner-h, 0px)" }} className="sticky z-40 bg-black/80 backdrop-blur-xl border-b border-[#222]">
         <div className="max-w-7xl mx-auto px-4 md:px-6 h-[60px] flex items-center justify-between">
           <div className="flex items-center gap-6">
             <Link href="/" className="flex items-center gap-2">
@@ -514,7 +520,7 @@ export default function DashboardPage() {
                         <div>
                           <p className="text-xs text-[#888]">Amount to Pay</p>
                           <p className="text-white font-bold">{payable()} {payCoin}</p>
-                          {couponOff > 0 && <p className="text-[10px] text-[#00ff88]">coupon {coupon} • {couponOff}% off</p>}
+                          {appliedOffer && <p className="text-[10px] text-[#00ff88]">coupon {appliedOffer.code} • {offerLabel(appliedOffer)}</p>}
                           <p className="text-[10px] text-[#888]">Duration: {durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit)}</p>
                         </div>
                         <div className="text-right">
@@ -526,14 +532,15 @@ export default function DashboardPage() {
                       <p className="text-xs text-[#666] mt-2 text-center">Contact only on Telegram: <a href="https://t.me/Rolax112" target="_blank" className="text-[#00D4FF]">t.me/Rolax112</a></p>
                     </div>
 
-                    {(settings as any)?.offersEnabled && (
+                    {liveOffers.length > 0 && (
                       <div className="rounded-2xl bg-[#111] border border-[#222] p-3">
                         <label className="text-xs text-[#888]">🎟️ Coupon code (offer)</label>
                         <div className="flex gap-2 mt-1">
-                          <input value={coupon} onChange={e => setCoupon(e.target.value.toUpperCase())} placeholder={(settings as any)?.offerCode || "DIWALI50"} className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-mono" />
+                          <input value={coupon} onChange={e => setCoupon(e.target.value.toUpperCase())} placeholder={liveOffers[0]?.code || "DIWALI50"} className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-mono" />
                           <button onClick={applyCoupon} className="px-4 py-2 rounded-xl bg-white text-black text-xs font-medium">Apply</button>
                         </div>
-                        {couponOff > 0 && <p className="text-[11px] text-[#00ff88] mt-1">{couponOff}% OFF lag gaya — pay ${payable()} ({`was $${planTotal(selectedPlan as any)}`})</p>}
+                        {appliedOffer && <p className="text-[11px] text-[#00ff88] mt-1">{offerLabel(appliedOffer)} lag gaya — pay ${payable()} (was ${planTotal(selectedPlan as any)}){appliedOffer.type === "freebie" ? ` • 🎁 ${appliedOffer.freebie}` : ""}</p>}
+                        {liveOffers.length > 0 && <p className="text-[10px] text-[#666] mt-1">Live codes: {liveOffers.map(o => o.code).filter(Boolean).join(" · ")}</p>}
                       </div>
                     )}
 

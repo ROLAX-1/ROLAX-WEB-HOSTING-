@@ -1,149 +1,211 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
-
-const PRESETS = [
-  { id: "diwali", emoji: "🪔", name: "Diwali Dhamaka", badge: "🪔 DIWALI DHAMAKA", title: "Diwali Special — 50% OFF", desc: "Har plan pe flat 50% off. Sirf Diwali tak!", code: "DIWALI50", discount: 50, banner: "🪔 Diwali Sale LIVE — coupon DIWALI50 se 50% OFF" },
-  { id: "newyear", emoji: "🎉", name: "New Year", badge: "🎉 NEW YEAR OFFER", title: "Naye Saal me Naya Project — 40% OFF", desc: "New year special discount har hosting plan pe.", code: "NEWYEAR40", discount: 40, banner: "🎉 New Year Sale — 40% OFF coupon NEWYEAR40" },
-  { id: "holi", emoji: "🎨", name: "Holi", badge: "🎨 HOLI SPLASH", title: "Holi Special — 35% OFF", desc: "Rangon wala offer, har plan pe 35% off!", code: "HOLI35", discount: 35, banner: "🎨 Holi Sale — 35% OFF coupon HOLI35" },
-  { id: "blackfriday", emoji: "🖤", name: "Black Friday", badge: "🖤 BLACK FRIDAY", title: "Black Friday — 60% OFF", desc: "Saal ka sabse bada discount.", code: "BLACK60", discount: 60, banner: "🖤 BLACK FRIDAY — 60% OFF coupon BLACK60" },
-  { id: "custom", emoji: "🔥", name: "Custom offer", badge: "🔥 SPECIAL OFFER", title: "Mega Sale — 25% OFF", desc: "Limited time offer.", code: "SAVE25", discount: 25, banner: "🔥 Mega Sale LIVE — coupon SAVE25" },
-];
+import { OFFER_PRESETS, THEMES, getOffers, makeOffer, type Offer } from "@/lib/offers";
 
 export default function OffersPanel() {
-  const { settings, setSettings, plans } = useStore();
-  const s = settings as any;
+  const { settings, setSettings, plans, hydrate } = useStore();
+  const [offers, setOffers] = useState<Offer[]>([]);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [annText, setAnnText] = useState("");
   const [annEmoji, setAnnEmoji] = useState("📢");
 
-  const set = (patch: any) => setSettings({ ...settings, ...patch } as any);
+  useEffect(() => { hydrate(); }, [hydrate]);
+  useEffect(() => { setOffers(getOffers(settings)); }, [settings]);
 
-  const applyPreset = (p: typeof PRESETS[number]) => {
-    set({
-      offersEnabled: true,
-      offerTheme: p.id,
-      offerBadge: p.badge,
-      offerTitle: p.title,
-      offerDesc: p.desc,
-      offerCode: p.code,
-      offerDiscount: p.discount,
-      offerBannerEnabled: true,
-      offerBannerText: p.banner,
-    } as any);
-    toast(`${p.emoji} ${p.name} offer apply ho gaya — Save mat bhoolna`, "success");
+  const persist = (next: Offer[]) => {
+    setOffers(next);
+    setSettings({ ...settings, offers: next } as any);
   };
 
+  const addPreset = (p: typeof OFFER_PRESETS[number]) => {
+    const o = makeOffer(p, offers.length);
+    persist([...offers, o]);
+    setOpenId(o.id);
+    toast(`${p.emoji} ${p.name} add ho gaya — neeche details edit karo`, "success");
+  };
+
+  const addBlank = () => {
+    const o = makeOffer(OFFER_PRESETS[OFFER_PRESETS.length - 1], offers.length);
+    o.title = "Naya Offer"; o.badge = "🔥 NEW OFFER"; o.desc = "Kuch bhi offer banao"; o.code = "NEWOFFER";
+    persist([...offers, o]);
+    setOpenId(o.id);
+    toast("Naya offer ban gaya — sab kuch tumhare control me", "success");
+  };
+
+  const update = (id: string, patch: Partial<Offer>) => persist(offers.map(o => o.id === id ? { ...o, ...patch } : o));
+  const remove = (id: string) => { if (confirm("Ye offer delete karna hai?")) { persist(offers.filter(o => o.id !== id)); toast("Offer delete ho gaya", "info"); } };
+  const duplicate = (o: Offer) => { const copy = { ...o, id: "of_" + Date.now(), title: o.title + " (copy)" }; persist([...offers, copy]); toast("Offer duplicate ho gaya", "success"); };
+
+  const saveAll = () => {
+    setSettings({ ...settings, offers } as any);
+    toast(`✅ Save ho gaya — ${offers.filter(o => o.enabled).length} offer live hain (landing page pe turant dikhenge)`, "success");
+  };
+
+  const anns = (settings as any).announcements || [];
+
   return (
-    <div className="space-y-5 max-w-3xl">
+    <div className="space-y-5 max-w-4xl pb-24">
       <div>
         <h2 className="font-grotesk text-xl font-bold">🎉 Offers & Festivals</h2>
-        <p className="text-sm text-[#888]">Diwali ya koi bhi offer banao — landing page pe banner, countdown, coupon code aur discounted price apne aap dikhega.</p>
+        <p className="text-sm text-[#888]">Jitne chahe offers banao — percentage, flat $, ya free gift. Har offer ka apna coupon, countdown aur top banner.</p>
       </div>
 
-      {/* presets */}
       <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
-        <p className="text-xs text-[#888] mb-2">1-click festival presets</p>
+        <p className="text-xs text-[#888] mb-2">1-click presets (jitne chahe add karo — 6, 8, 10...)</p>
         <div className="flex flex-wrap gap-2">
-          {PRESETS.map(p => (
-            <button key={p.id} onClick={() => applyPreset(p)} className="px-3 py-2 rounded-full bg-black border border-[#222] hover:border-white text-xs">
-              {p.emoji} {p.name}
-            </button>
+          {OFFER_PRESETS.map(p => (
+            <button key={p.key} onClick={() => addPreset(p)} className="px-3 py-2 rounded-full bg-black border border-[#222] hover:border-white text-xs">{p.emoji} {p.name}</button>
           ))}
+          <button onClick={addBlank} className="px-3 py-2 rounded-full bg-white text-black text-xs font-medium">+ Koi bhi naya offer</button>
         </div>
       </div>
 
-      {/* offer form */}
+      {offers.length === 0 && (
+        <div className="rounded-2xl bg-[#111] border border-[#222] p-6 text-center">
+          <p className="text-3xl mb-2">🎁</p>
+          <p className="text-sm text-[#888]">Abhi koi offer nahi. Upar se preset chuno ya &ldquo;Koi bhi naya offer&rdquo; dabao.</p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {offers.map((o, idx) => {
+          const theme = THEMES[o.theme] || THEMES.custom;
+          const open = openId === o.id;
+          return (
+            <div key={o.id} className="rounded-2xl bg-[#111] border border-[#222] overflow-hidden">
+              <div className="p-3 flex items-center gap-3">
+                <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm shrink-0" style={{ background: theme.grad }}>{o.emoji}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{o.title}</p>
+                  <p className="text-[11px] text-[#666] truncate">{o.code || "no code"} • {o.type === "percent" ? `${o.discount}%` : o.type === "flat" ? `$${o.flatOff} off` : (o.freebie || "freebie")} • {o.banner ? "banner ON" : "banner off"}</p>
+                </div>
+                <button onClick={() => update(o.id, { enabled: !o.enabled })} className={`px-2.5 py-1 rounded-full text-[10px] shrink-0 ${o.enabled ? "bg-[#00ff88]/15 text-[#00ff88]" : "bg-[#222] text-[#888]"}`}>{o.enabled ? "LIVE" : "OFF"}</button>
+                <button onClick={() => setOpenId(open ? null : o.id)} className="px-3 py-1 rounded-full bg-[#111] border border-[#222] text-[10px] shrink-0">{open ? "Close" : "Edit"}</button>
+              </div>
+
+              {open && (
+                <div className="p-4 border-t border-[#222] space-y-3 bg-black/40">
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <div className="md:col-span-2">
+                      <label className="text-[11px] text-[#888]">Offer ka type</label>
+                      <div className="flex gap-2 mt-1">
+                        {[["percent", "% discount"], ["flat", "Flat $ off"], ["freebie", "Free gift"]] .map(([v, l]) => (
+                          <button key={v} onClick={() => update(o.id, { type: v as any })}
+                            className={`px-3 py-1.5 rounded-full text-[11px] border ${o.type === v ? "bg-white text-black border-white" : "bg-black border-[#222] text-[#888]"}`}>{l}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-[#888]">Title</label>
+                      <input value={o.title} onChange={e => update(o.id, { title: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-[#888]">Badge</label>
+                      <input value={o.badge} onChange={e => update(o.id, { badge: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="text-[11px] text-[#888]">Description</label>
+                      <input value={o.desc} onChange={e => update(o.id, { desc: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-[#888]">Coupon code</label>
+                      <input value={o.code} onChange={e => update(o.id, { code: e.target.value.toUpperCase() })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-mono" />
+                    </div>
+                    {o.type === "percent" && (
+                      <div>
+                        <label className="text-[11px] text-[#888]">Discount %</label>
+                        <input type="number" value={o.discount} onChange={e => update(o.id, { discount: Number(e.target.value) })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                      </div>
+                    )}
+                    {o.type === "flat" && (
+                      <div>
+                        <label className="text-[11px] text-[#888]">Flat $ off</label>
+                        <input type="number" value={o.flatOff} onChange={e => update(o.id, { flatOff: Number(e.target.value) })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                      </div>
+                    )}
+                    {o.type === "freebie" && (
+                      <div>
+                        <label className="text-[11px] text-[#888]">Free gift kya hai</label>
+                        <input value={o.freebie} onChange={e => update(o.id, { freebie: e.target.value })} placeholder="Free .com domain, 1 month extra…" className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                      </div>
+                    )}
+                    <div>
+                      <label className="text-[11px] text-[#888]">Theme</label>
+                      <select value={o.theme} onChange={e => update(o.id, { theme: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm">
+                        {Object.entries(THEMES).map(([k, t]) => <option key={k} value={k}>{t.emoji} {t.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-[#888]">Emoji</label>
+                      <input value={o.emoji} onChange={e => update(o.id, { emoji: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm text-center" />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-[#888]">Kab tak (countdown)</label>
+                      <input type="datetime-local" value={o.endsAt} onChange={e => update(o.id, { endsAt: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="text-[11px] text-[#888]">Kis plan pe (khali = saare paid plans)</label>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {(plans || []).filter(p => p.price > 0).map(p => {
+                          const on = (o.plans || []).includes(p.id);
+                          return (
+                            <button key={p.id} onClick={() => update(o.id, { plans: on ? (o.plans || []).filter(x => x !== p.id) : [...(o.plans || []), p.id] })}
+                              className={`px-3 py-1.5 rounded-full text-[11px] border ${on ? "bg-white text-black border-white" : "bg-black border-[#222] text-[#888]"}`}>{p.name} (${p.price})</button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl bg-[#111] border border-[#222] p-3">
+                    <label className="flex items-center justify-between">
+                      <span className="text-xs">Top banner me dikhao</span>
+                      <input type="checkbox" checked={o.banner} onChange={e => update(o.id, { banner: e.target.checked })} className="w-4 h-4 accent-[#6C5CE7]" />
+                    </label>
+                    <input value={o.bannerText} onChange={e => update(o.id, { bannerText: e.target.value })} placeholder="Banner text" className="mt-2 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-xs" />
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button onClick={() => duplicate(o)} className="px-3 py-1.5 rounded-full bg-[#111] border border-[#222] text-[11px]">Duplicate</button>
+                    <button onClick={() => remove(o.id)} className="px-3 py-1.5 rounded-full bg-red-500/10 text-red-400 text-[11px]">Delete offer #{idx + 1}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Announcements */}
       <div className="rounded-2xl bg-[#111] border border-[#222] p-4 space-y-3">
-        <label className="flex items-center justify-between">
-          <span className="text-sm font-medium">Offer chalau (landing page pe section)</span>
-          <input type="checkbox" checked={!!s.offersEnabled} onChange={e => set({ offersEnabled: e.target.checked })} className="w-5 h-5 accent-[#6C5CE7]" />
-        </label>
-
-        <div className="grid md:grid-cols-2 gap-3">
-          <div>
-            <label className="text-[11px] text-[#888]">Badge</label>
-            <input value={s.offerBadge || ""} onChange={e => set({ offerBadge: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" placeholder="🪔 DIWALI DHAMAKA" />
-          </div>
-          <div>
-            <label className="text-[11px] text-[#888]">Theme</label>
-            <select value={s.offerTheme || "diwali"} onChange={e => set({ offerTheme: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm">
-              {PRESETS.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div>
-          <label className="text-[11px] text-[#888]">Title</label>
-          <input value={s.offerTitle || ""} onChange={e => set({ offerTitle: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
-        </div>
-        <div>
-          <label className="text-[11px] text-[#888]">Description</label>
-          <input value={s.offerDesc || ""} onChange={e => set({ offerDesc: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
-        </div>
-
-        <div className="grid md:grid-cols-3 gap-3">
-          <div>
-            <label className="text-[11px] text-[#888]">Coupon code</label>
-            <input value={s.offerCode || ""} onChange={e => set({ offerCode: e.target.value.toUpperCase() })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm font-mono" />
-          </div>
-          <div>
-            <label className="text-[11px] text-[#888]">Discount %</label>
-            <input type="number" value={s.offerDiscount ?? 0} onChange={e => set({ offerDiscount: Number(e.target.value) })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
-          </div>
-          <div>
-            <label className="text-[11px] text-[#888]">Kab tak (countdown)</label>
-            <input type="datetime-local" value={s.offerEndsAt || ""} onChange={e => set({ offerEndsAt: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
-          </div>
-        </div>
-
-        <div>
-          <label className="text-[11px] text-[#888]">Kis plan pe offer lagu (khali = saare paid plans)</label>
-          <div className="flex flex-wrap gap-2 mt-1">
-            {(plans || []).filter(p => p.price > 0).map(p => {
-              const on = (s.offerPlans || []).includes(p.id);
-              return (
-                <button key={p.id} onClick={() => set({ offerPlans: on ? (s.offerPlans || []).filter((x: string) => x !== p.id) : [...(s.offerPlans || []), p.id] })}
-                  className={`px-3 py-1.5 rounded-full text-[11px] border ${on ? "bg-white text-black border-white" : "bg-black border-[#222] text-[#888]"}`}>
-                  {p.name} (${p.price})
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* banner */}
-      <div className="rounded-2xl bg-[#111] border border-[#222] p-4 space-y-2">
-        <label className="flex items-center justify-between">
-          <span className="text-sm font-medium">Top banner dikhao (poori site pe)</span>
-          <input type="checkbox" checked={!!s.offerBannerEnabled} onChange={e => set({ offerBannerEnabled: e.target.checked })} className="w-5 h-5 accent-[#6C5CE7]" />
-        </label>
-        <input value={s.offerBannerText || ""} onChange={e => set({ offerBannerText: e.target.value })} className="w-full px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" placeholder="🪔 Diwali Sale LIVE — coupon DIWALI50" />
-      </div>
-
-      {/* announcements */}
-      <div className="rounded-2xl bg-[#111] border border-[#222] p-4 space-y-3">
-        <h4 className="text-sm font-semibold">📢 Announcements (chhoti khabrein landing page pe)</h4>
+        <h4 className="text-sm font-semibold">📢 Announcements</h4>
         <div className="flex gap-2">
           <input value={annEmoji} onChange={e => setAnnEmoji(e.target.value)} className="w-14 px-2 py-2 rounded-xl bg-black border border-[#222] text-sm text-center" />
           <input value={annText} onChange={e => setAnnText(e.target.value)} placeholder="Naya feature: Python runner live hai!" className="flex-1 px-3 py-2 rounded-xl bg-black border border-[#222] text-sm" />
           <button onClick={() => {
             if (!annText.trim()) return;
-            set({ announcements: [...(s.announcements || []), { id: "an_" + Date.now(), text: annText.trim(), emoji: annEmoji, active: true }] });
+            setSettings({ ...settings, announcements: [...anns, { id: "an_" + Date.now(), text: annText.trim(), emoji: annEmoji, active: true }] } as any);
             setAnnText(""); toast("Announcement add ho gaya", "success");
           }} className="px-4 py-2 rounded-full bg-white text-black text-xs">+ Add</button>
         </div>
-        {(s.announcements || []).length === 0 && <p className="text-[11px] text-[#666]">Koi announcement nahi.</p>}
-        {(s.announcements || []).map((a: any) => (
+        {anns.length === 0 && <p className="text-[11px] text-[#666]">Koi announcement nahi.</p>}
+        {anns.map((a: any) => (
           <div key={a.id} className="flex items-center gap-2 rounded-xl bg-black border border-[#222] p-2">
             <span>{a.emoji}</span>
             <span className="flex-1 text-xs text-[#ddd]">{a.text}</span>
-            <button onClick={() => set({ announcements: (s.announcements || []).map((x: any) => x.id === a.id ? { ...x, active: !x.active } : x) })}
+            <button onClick={() => setSettings({ ...settings, announcements: anns.map((x: any) => x.id === a.id ? { ...x, active: !x.active } : x) } as any)}
               className={`px-2 py-1 rounded-full text-[10px] ${a.active ? "bg-[#00ff88]/15 text-[#00ff88]" : "bg-[#222] text-[#888]"}`}>{a.active ? "ON" : "OFF"}</button>
-            <button onClick={() => set({ announcements: (s.announcements || []).filter((x: any) => x.id !== a.id) })} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-[10px]">✕</button>
+            <button onClick={() => setSettings({ ...settings, announcements: anns.filter((x: any) => x.id !== a.id) } as any)} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-[10px]">✕</button>
           </div>
         ))}
+      </div>
+
+      {/* sticky save */}
+      <div className="fixed bottom-0 left-0 right-0 md:left-[260px] z-50 bg-[#0a0a0f]/95 backdrop-blur border-t border-[#222] px-4 py-3 flex items-center justify-between gap-3">
+        <p className="text-[11px] text-[#888]">{offers.filter(o => o.enabled).length} live / {offers.length} total offers</p>
+        <button onClick={saveAll} className="px-6 py-2.5 rounded-full bg-white text-black text-sm font-semibold">💾 Save offers</button>
       </div>
     </div>
   );

@@ -165,6 +165,7 @@ export type SiteSettings = {
   footerLogoUrl?: string;
   heroImageUrl?: string;
   /* offers / festival */
+  offers?: any[];
   offersEnabled?: boolean;
   offerBadge?: string;
   offerTitle?: string;
@@ -252,11 +253,12 @@ const defaultSettings: SiteSettings = {
   accentColor: "#6C5CE7",
   heroImageUrl: "/images/rolax-hero-new.jpg",
   offersEnabled: false,
+  offers: [],
   offerBadge: "🪔 DIWALI DHAMAKA",
   offerTitle: "Diwali Special — 50% OFF",
   offerDesc: "Har plan pe flat 50% off. Sirf Diwali tak!",
-  offerCode: "DIWALI50",
-  offerDiscount: 50,
+  offerCode: "",
+  offerDiscount: 0,
   offerEndsAt: "",
   offerTheme: "diwali",
   offerPlans: [],
