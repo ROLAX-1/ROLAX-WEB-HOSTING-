@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useRef } from "react";
+import { summarizeRevenue, money, isPending } from "@/lib/revenue";
 import { useStore, ADMIN_EMAIL, DURATION_PRESETS, durationInDays, durationLabel, planTotal, type DurationUnit } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
 import Link from "next/link";
@@ -93,7 +94,8 @@ export default function AdminPage() {
     } catch {}
   };
 
-  const revenue = payments.filter(p => p.status === "approved").reduce((sum, p) => sum + p.amount, 0);
+  const rev = summarizeRevenue(payments);
+  const revenue = rev.total;
 
   const defaultPlansReset = () => ([
     { id: "plan_free", name: "Starter", price: 0, ram: "512 MB", cpu: "0.5 vCPU", storage: "2 GB", bandwidth: "10 GB", features: ["1 Website", "512 MB RAM", "Community Support", "Free SSL"], durationValue: 1, durationUnit: "months" },
@@ -130,17 +132,12 @@ export default function AdminPage() {
     setWebsites(next);
     toast(`Auto-fix complete: ${fixedCount} fixed, ${still} need manual help`, still ? "error" : "success");
   };
-  const pendingCount = payments.filter(p => p.status === "pending").length;
+  const pendingCount = payments.filter(isPending).length;
+  const newUsersThisWeek = users.filter((u: any) => Date.now() - new Date(u.createdAt || 0).getTime() < 7 * 86400000).length;
+  const newSitesThisWeek = websites.filter((w: any) => Date.now() - new Date(w.createdAt || w.deployedAt || 0).getTime() < 7 * 86400000).length;
 
-  const chartData = [
-    { name: "Mon", revenue: 120 },
-    { name: "Tue", revenue: 200 },
-    { name: "Wed", revenue: 150 },
-    { name: "Thu", revenue: 300 },
-    { name: "Fri", revenue: 250 },
-    { name: "Sat", revenue: 400 },
-    { name: "Sun", revenue: revenue || 320 },
-  ];
+  // asli 7-din ka revenue chart (koi fake number nahi)
+  const chartData = rev.series;
 
   return (
     <div className="min-h-screen bg-black text-white flex">
@@ -231,12 +228,12 @@ export default function AdminPage() {
                 <div className="rounded-2xl bg-[#111] border border-[#222] p-5">
                   <p className="text-xs text-[#888]">Total Users</p>
                   <p className="text-2xl font-bold mt-1">{users.length}</p>
-                  <p className="text-xs text-[#00ff88] mt-1">↗ +12% this week</p>
+                  <p className="text-xs text-[#888] mt-1">{newUsersThisWeek} is hafte aaye</p>
                 </div>
                 <div className="rounded-2xl bg-[#111] border border-[#222] p-5">
                   <p className="text-xs text-[#888]">Total Sites</p>
                   <p className="text-2xl font-bold mt-1">{websites.length}</p>
-                  <p className="text-xs text-[#00ff88] mt-1">↗ +8% this week</p>
+                  <p className="text-xs text-[#888] mt-1">{newSitesThisWeek} is hafte deploy hue</p>
                 </div>
                 <div className="rounded-2xl bg-[#111] border border-[#222] p-5">
                   <p className="text-xs text-[#888]">Pending Payments</p>
@@ -244,14 +241,23 @@ export default function AdminPage() {
                   <p className="text-xs text-yellow-400 mt-1">Needs approval</p>
                 </div>
                 <div className="rounded-2xl bg-gradient-to-br from-[#6C5CE7] to-[#00D4FF] p-5 text-white">
-                  <p className="text-xs text-white/80">Total Revenue</p>
-                  <p className="text-2xl font-bold mt-1">${revenue.toFixed(2)}</p>
-                  <p className="text-xs text-white/60 mt-1">All time</p>
+                  <p className="text-xs text-white/80">Total Revenue (approved)</p>
+                  <p className="text-2xl font-bold mt-1">{money(rev.total)}</p>
+                  <p className="text-xs text-white/70 mt-1">Aaj {money(rev.today)} • 7d {money(rev.week)} • {rev.paidCount} payment(s)</p>
+                  {rev.pendingCount > 0 && <p className="text-[11px] text-white/80 mt-1">+ {money(rev.pending)} pending ({rev.pendingCount})</p>}
                 </div>
               </div>
 
               <div className="rounded-2xl bg-[#111] border border-[#222] p-6">
-                <h3 className="font-semibold">Revenue Chart</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold">Revenue — last 7 days</h3>
+                  <p className="text-[11px] text-[#666]">Aaj {money(rev.today)} • 30d {money(rev.month)} • avg {money(rev.avg)}</p>
+                </div>
+                {rev.paidCount === 0 && (
+                  <p className="text-xs text-[#888] mt-3 rounded-xl bg-black border border-[#222] p-3">
+                    Abhi koi approved payment nahi — Payments tab me approve karo to revenue yahan turant dikhega. (Pending: {money(rev.pending)})
+                  </p>
+                )}
                 <div className="mt-4 h-[240px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={chartData}>

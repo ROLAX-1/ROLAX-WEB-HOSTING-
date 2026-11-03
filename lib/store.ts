@@ -466,43 +466,9 @@ export const useStore = create<Store>((set, get) => ({
     const tickets = load<Ticket[]>("rolax_tickets", []);
     const users = load<UserType[]>("rolax_users", []);
     const features = load<FeatureDef[]>("rolax_features", DEFAULT_FEATURES);
-    // seed dummy data if empty
-    let seededWebsites = websites;
-    let seededPayments = payments;
-    let seededTickets = tickets;
-    let seededUsers = users;
+    // NOTE: koi dummy/demo data nahi — jo user khud kamayega wahi revenue me dikhega
 
-    if (websites.length === 0) {
-      seededWebsites = [
-        { id: "ws1", userId: "demo1", name: "my-portfolio", url: "my-portfolio.rolax.host", stack: "HTML", status: "Running", cpu: 34, ram: 42, fileType: "HTML Website", botType: "Static Site", errorCount: 0, deployedAt: new Date().toISOString(), fileSize: "2.4 MB", createdAt: new Date().toISOString() },
-        { id: "ws2", userId: "demo1", name: "api-backend", url: "api-backend.rolax.host", stack: "Node.js", status: "Running", cpu: 67, ram: 58, fileType: "Node.js Bot", botType: "Discord Bot", errorCount: 0, deployedAt: new Date().toISOString(), fileSize: "15.2 MB", createdAt: new Date().toISOString() },
-        { id: "ws3", userId: "demo1", name: "telegram-bot", url: "telegram-bot.rolax.host", stack: "Python", status: "Error", cpu: 12, ram: 18, fileType: "Python Bot", botType: "Telegram Bot", errorCount: 3, lastError: "ModuleNotFoundError: No module named 'telebot'", deployedAt: new Date().toISOString(), fileSize: "8.1 MB", createdAt: new Date().toISOString() },
-      ];
-    }
-    if (payments.length === 0) {
-      seededPayments = [
-        { id: "pay1", userId: "u2", userEmail: "alex@example.com", planId: "plan_pro", planName: "Pro Hosting", amount: 4.99, coin: "USDT", txid: "0x9a3f...c4e2", status: "pending", createdAt: new Date().toISOString() },
-      ];
-    }
-    if (tickets.length === 0) {
-      seededTickets = [
-        { id: "t1", userId: "u2", userEmail: "alex@example.com", subject: "Deployment failed", message: "My Python app is not deploying, shows error 500", status: "open", replies: [], createdAt: new Date().toISOString() },
-      ];
-    }
-    if (users.length === 0) {
-      seededUsers = [
-        { id: "u1", name: "Demo User", email: "demo@rolax.host", planId: "plan_pro", planExpiry: new Date(Date.now() + 30*24*3600000).toISOString(), status: "active", createdAt: new Date().toISOString() },
-        { id: "u2", name: "Alex Morgan", email: "alex@example.com", status: "active", createdAt: new Date().toISOString() },
-        { id: "u3", name: "Sarah Chen", email: "sarah@example.com", planId: "plan_enterprise", planExpiry: new Date(Date.now() + 60*24*3600000).toISOString(), status: "active", createdAt: new Date().toISOString() },
-      ];
-    }
-
-    set({ plans, stacks, wallets, settings, features: features.length ? features : DEFAULT_FEATURES, websites: seededWebsites, payments: seededPayments, tickets: seededTickets, users: seededUsers, hydrated: true });
-    // persist seeds
-    save("rolax_websites", seededWebsites);
-    save("rolax_payments", seededPayments);
-    save("rolax_tickets", seededTickets);
-    save("rolax_users", seededUsers);
+    set({ plans, stacks, wallets, settings, features: features.length ? features : DEFAULT_FEATURES, websites, payments, tickets, users, hydrated: true });
   },
 }));
 

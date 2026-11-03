@@ -12,6 +12,7 @@ import { useBotStatus, restartBot } from "@/components/BotWorker";
 import { hasFeature, planStatusFor, planEntitlements } from "@/lib/entitlements";
 import { toast } from "@/components/ui/Toaster";
 import { getOffers, offerLive, findOfferByCode, applyOffer, offerLabel } from "@/lib/offers";
+import { summarizeRevenue, money, isPending, isPaid } from "@/lib/revenue";
 import ScriptStorePanel from "@/components/ScriptStore";
 import { recordLogin } from "@/components/admin/StatsPanel";
 import Logo from "@/components/Logo";
@@ -472,6 +473,24 @@ export default function DashboardPage() {
                     </div>
                   ))}
                 </div>
+                <div className="mt-6 grid grid-cols-3 gap-3">
+                  <div className="rounded-2xl bg-gradient-to-br from-[#6C5CE7]/20 to-[#00D4FF]/20 border border-[#6C5CE7]/25 p-4">
+                    <p className="text-[11px] text-[#a89bff]">Total Spend</p>
+                    <p className="text-xl font-bold mt-1">{money(summarizeRevenue(myPayments as any[]).total)}</p>
+                    <p className="text-[10px] text-[#888]">{summarizeRevenue(myPayments as any[]).paidCount} approved</p>
+                  </div>
+                  <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
+                    <p className="text-[11px] text-[#888]">Pending</p>
+                    <p className="text-xl font-bold mt-1">{money(summarizeRevenue(myPayments as any[]).pending)}</p>
+                    <p className="text-[10px] text-[#666]">{summarizeRevenue(myPayments as any[]).pendingCount} approval ka wait</p>
+                  </div>
+                  <div className="rounded-2xl bg-[#111] border border-[#222] p-4">
+                    <p className="text-[11px] text-[#888]">Aaj</p>
+                    <p className="text-xl font-bold mt-1">{money(summarizeRevenue(myPayments as any[]).today)}</p>
+                    <p className="text-[10px] text-[#666]">7d {money(summarizeRevenue(myPayments as any[]).week)}</p>
+                  </div>
+                </div>
+
                 {myPayments.length > 0 && (
                   <div className="mt-6 rounded-2xl bg-[#111] border border-[#222] p-5">
                     <h4 className="font-semibold">Payment History</h4>
