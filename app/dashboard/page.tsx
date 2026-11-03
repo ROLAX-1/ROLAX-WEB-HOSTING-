@@ -14,17 +14,21 @@ import { toast } from "@/components/ui/Toaster";
 import { getOffers, offerLive, findOfferByCode, applyOffer, offerLabel } from "@/lib/offers";
 import { summarizeRevenue, money, isPending, isPaid } from "@/lib/revenue";
 import ScriptStorePanel from "@/components/ScriptStore";
+import WalletPanel from "@/components/WalletPanel";
+import { walletOf, debit as walletDebit, txsOf } from "@/lib/wallet";
+import { useSearchParams } from "next/navigation";
 import { recordLogin } from "@/components/admin/StatsPanel";
 import Logo from "@/components/Logo";
 import Link from "next/link";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { hydrate, hydrated, plans, stacks, wallets, settings, websites, setWebsites, payments, setPayments, tickets, setTickets, users } = useStore();
+  const { hydrate, hydrated, plans, stacks, wallets, settings, websites, setWebsites, payments, setPayments, tickets, setTickets, users, setUsers } = useStore();
   const [auth, setAuth] = useState<any>(null);
   const [coupon, setCoupon] = useState("");
   const [couponOff, setCouponOff] = useState(0);
   const [appliedOffer, setAppliedOffer] = useState<any>(null);
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [tab, setTab] = useState("overview");
   const [showDeploy, setShowDeploy] = useState(false);
   const [deployData, setDeployData] = useState<{ name: string; stack: string; github: string; files: File[] }>({ name: "", stack: "HTML", github: "", files: [] });
@@ -53,6 +57,13 @@ export default function DashboardPage() {
 
   useEffect(() => { hydrate(); }, [hydrate]);
 
+  // ?tab=wallet / store / billing deep-link support
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search).get("tab");
+    if (q) setTab(q);
+  }, []);
+
   // login event record (admin stats ke liye)
   useEffect(() => {
     if (!auth) return;
@@ -61,6 +72,16 @@ export default function DashboardPage() {
     sessionStorage.setItem(key, "1");
     recordLogin({ userId: auth.id || "", email: auth.email, name: auth.name, method: (typeof window !== "undefined" && localStorage.getItem("rolax_auth_method") === "google") ? "google" : "email" });
   }, [auth]);
+
+  // wallet balance load + live refresh
+  useEffect(() => {
+    if (!auth?.id) return;
+    const load = () => setWalletBalance(walletOf(auth.id).balance);
+    load();
+    window.addEventListener("focus", load);
+    window.addEventListener("rolax:sync", load);
+    return () => { window.removeEventListener("focus", load); window.removeEventListener("rolax:sync", load); };
+  }, [auth?.id]);
   useEffect(() => {
     try {
       const raw = localStorage.getItem("rolax_google_profile");
@@ -77,6 +98,8 @@ export default function DashboardPage() {
   }, [router]);
 
   if (!hydrated || !auth) return <div className="min-h-screen bg-black flex items-center justify-center text-[#888]">Loading...</div>;
+
+
 
   const myWebsites = websites.filter(w => w.userId === auth.id);
   const myPayments = payments.filter(p => p.userId === auth.id);
@@ -252,6 +275,7 @@ export default function DashboardPage() {
                 { id: "overview", label: "Overview" },
                 { id: "sites", label: "My Websites" },
                 { id: "store", label: "Script Store" },
+                { id: "wallet", label: "Wallet" },
                 { id: "billing", label: "Billing" },
                 { id: "support", label: "Support" },
               ].map(item => (
@@ -270,7 +294,7 @@ export default function DashboardPage() {
         </div>
         {/* Mobile tabs */}
         <div className="md:hidden flex gap-1 px-4 pb-3 overflow-x-auto">
-          {["overview", "sites", "store", "billing", "support"].map(id => (
+          {["overview", "sites", "store", "wallet", "billing", "support"].map(id => (
             <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-full text-sm whitespace-nowrap ${tab === id ? "bg-white text-black" : "bg-[#111] border border-[#222] text-[#888]"}`}>{id}</button>
           ))}
         </div>
@@ -572,6 +596,48 @@ export default function DashboardPage() {
                       <input value={screenshot} onChange={e => setScreenshot(e.target.value)} placeholder="https://... or paste image link" className="mt-1 w-full px-4 py-3 rounded-xl bg-black border border-[#222] text-sm placeholder:text-[#555] focus:outline-none focus:border-[#6C5CE7]/50" />
                       <p className="text-[10px] text-[#666] mt-1">Tip: Upload to imgur & paste link</p>
                     </div>
+                    {/* WALLET se pay — instant, koi approval wait nahi */}
+                    <div className="rounded-2xl bg-[#111] border border-[#00ff88]/30 p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs text-[#888]">💳 Wallet balance</p>
+                          <p className="text-lg font-bold text-[#00ff88]">{walletBalance !== null ? `$${walletBalance.toFixed(2)}` : "—"}</p>
+                        </div>
+                        <button
+                          disabled={walletBalance === null || walletBalance + 0.001 < payable()}
+                          onClick={() => {
+                            const paid = walletDebit(auth.id, payable(), `Plan purchase: ${selectedPlan.name} (${durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit)})`, selectedPlan.id);
+                            if (paid) {
+                              const p = {
+                                id: "pay_" + Date.now(), userId: auth.id, userEmail: auth.email,
+                                planId: selectedPlan.id, planName: selectedPlan.name, amount: payable(),
+                                durationLabel: durationLabel(selectedPlan.durationValue, selectedPlan.durationUnit),
+                                durationDays: durationInDays(selectedPlan.durationValue, selectedPlan.durationUnit),
+                                coin: "WALLET", txid: "wallet_" + Date.now(),
+                                status: "approved" as const, createdAt: new Date().toISOString(),
+                                coupon: appliedOffer ? appliedOffer.code : "", discount: couponOff,
+                              };
+                              setPayments([...payments, p]);
+                              setUsers(users.map((u: any) => u.id === auth.id ? { ...u, planId: selectedPlan.id, planExpiry: new Date(Date.now() + durationInDays(selectedPlan.durationValue, selectedPlan.durationUnit) * 86400000).toISOString(), status: "active" } : u));
+                              setWalletBalance(walletOf(auth.id).balance);
+                              toast(`Plan activate ho gaya — $${payable().toFixed(2)} wallet se kata 🎉`, "success");
+                              setSelectedPlan(null);
+                            } else {
+                              toast("Wallet me paisa kam hai — pehle add karo", "error");
+                            }
+                          }}
+                          className="px-4 py-2.5 rounded-full bg-[#00ff88] text-black text-xs font-bold disabled:opacity-40"
+                        >Pay ${payable().toFixed(2)} from wallet</button>
+                      </div>
+                      {walletBalance === null || walletBalance + 0.001 < payable() ? (
+                        <button onClick={() => setTab("wallet")} className="mt-2 text-[11px] text-[#00D4FF] underline">Wallet me paise add karo →</button>
+                      ) : (
+                        <p className="text-[10px] text-[#00ff88] mt-1">Instant activation — koi admin approval nahi chahiye</p>
+                      )}
+                    </div>
+
+                    <div className="text-center text-[10px] text-[#555]">— ya crypto se pay karo —</div>
+
                     <button onClick={submitPayment} className="w-full py-3 rounded-full bg-gradient-to-r from-[#6C5CE7] to-[#00D4FF] text-white font-medium text-sm">Submit for Approval →</button>
                     <p className="text-xs text-[#666] text-center">Your plan will be activated after admin approves (within 24h)</p>
                   </div>
@@ -584,6 +650,8 @@ export default function DashboardPage() {
         )}
 
         {tab === "store" && <ScriptStorePanel />}
+
+        {tab === "wallet" && <WalletPanel auth={auth} onGoBilling={() => setTab("billing")} />}
 
         {tab === "support" && (
           <div className="space-y-6 max-w-3xl">

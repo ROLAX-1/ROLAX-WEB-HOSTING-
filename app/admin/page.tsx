@@ -17,6 +17,7 @@ import { analyzeProject } from "@/lib/aianalyze";
 import OffersPanel from "@/components/admin/OffersPanel";
 import ScriptStorePanel from "@/components/admin/ScriptStorePanel";
 import StatsPanel from "@/components/admin/StatsPanel";
+import WalletAdminPanel from "@/components/admin/WalletAdminPanel";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -133,6 +134,7 @@ export default function AdminPage() {
     toast(`Auto-fix complete: ${fixedCount} fixed, ${still} need manual help`, still ? "error" : "success");
   };
   const pendingCount = payments.filter(isPending).length;
+  const pendingWallet = typeof window !== "undefined" ? (JSON.parse(localStorage.getItem("rolax_wallet_tx") || "[]") as any[]).filter(t => t.type === "deposit" && t.status === "pending").length : 0;
   const newUsersThisWeek = users.filter((u: any) => Date.now() - new Date(u.createdAt || 0).getTime() < 7 * 86400000).length;
   const newSitesThisWeek = websites.filter((w: any) => Date.now() - new Date(w.createdAt || w.deployedAt || 0).getTime() < 7 * 86400000).length;
 
@@ -157,11 +159,12 @@ export default function AdminPage() {
             { id: "customizer", label: "Site Customizer", icon: "🎨" },
             { id: "offers", label: "Offers & Festivals", icon: "🎉" },
             { id: "store", label: "Script Store", icon: "🛒" },
+            { id: "wallets", label: "Wallet Manager", icon: "💳", badge: pendingWallet },
             { id: "stats", label: "Stats & Accounts", icon: "📊" },
             { id: "features", label: "Feature Manager", icon: "🧩" },
             { id: "plans", label: "Plan Manager", icon: "💳" },
             { id: "stacks", label: "Stack Manager", icon: "⚙️" },
-            { id: "wallets", label: "Crypto Wallets", icon: "₿" },
+            { id: "cryptowallets", label: "Crypto Wallets", icon: "₿" },
             { id: "payments", label: "Payments", icon: "💰", badge: pendingCount },
             { id: "hosting", label: "Hosting Errors", icon: "🚨", badge: brokenSites.length },
             { id: "users", label: "User Manager", icon: "👥" },
@@ -192,7 +195,7 @@ export default function AdminPage() {
           <button onClick={() => { clearAuth(); router.push("/"); }} className="px-3 py-1 rounded-full bg-[#111] border border-[#222] text-xs">Logout</button>
         </div>
         <div className="md:hidden flex gap-2 p-3 overflow-x-auto border-b border-[#222] bg-black sticky top-[49px] z-30">
-          {["overview", "customizer", "offers", "store", "stats", "features", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
+          {["overview", "customizer", "offers", "store", "wallets", "stats", "features", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
             <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-full text-xs whitespace-nowrap ${tab === id ? "bg-white text-black" : "bg-[#111] border border-[#222] text-[#888]"}`}>{id}</button>
           ))}
         </div>
@@ -403,6 +406,7 @@ export default function AdminPage() {
 
           {tab === "offers" && <OffersPanel />}
           {tab === "store" && <ScriptStorePanel />}
+          {tab === "wallets" && <WalletAdminPanel />}
           {tab === "stats" && <StatsPanel />}
 
           {tab === "customizer" && (
@@ -772,7 +776,7 @@ export default function AdminPage() {
             </div>
           )}
 
-          {tab === "wallets" && (
+          {tab === "cryptowallets" && (
             <div className="space-y-6 max-w-2xl">
               <div className="flex items-center justify-between">
                 <h2 className="font-grotesk text-xl font-bold">Crypto Wallet Manager</h2>

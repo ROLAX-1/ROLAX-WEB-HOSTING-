@@ -1,8 +1,10 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
+import Link from "next/link";
 import { toast } from "@/components/ui/Toaster";
-import { buyScript, downloadScript, hasAccess, useScripts, effectiveAccess } from "@/lib/scripts";
+import { buyScript, downloadScript, hasAccess, useScripts, effectiveAccess, purchaseWithWallet, money } from "@/lib/scripts";
+import { walletOf } from "@/lib/wallet";
 
 export default function ScriptStore() {
   const { plans } = useStore();
@@ -10,6 +12,8 @@ export default function ScriptStore() {
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("All");
   const [sort, setSort] = useState<"new" | "priceLow" | "priceHigh" | "popular">("new");
+  const [balance, setBalance] = useState(0);
+  const [buying, setBuying] = useState<string | null>(null);
 
   const me = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -24,6 +28,8 @@ export default function ScriptStore() {
     } catch { return me; }
   }, [me]);
 
+  useEffect(() => { if (myUser?.id) setBalance(walletOf(myUser.id).balance); }, [myUser?.id]);
+
   const list = scripts
     .filter(s => s.active)
     .filter(s => cat === "All" || s.category === cat)
@@ -32,9 +38,16 @@ export default function ScriptStore() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="font-grotesk text-xl font-bold">🛒 Script Store</h2>
-        <p className="text-sm text-[#888]">Ready-made bots, websites aur scripts — search karo, price dekho, download karo.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="font-grotesk text-xl font-bold">🛒 Script Store</h2>
+          <p className="text-sm text-[#888]">Ready-made bots, websites aur scripts — search karo, price dekho, wallet se kharido.</p>
+        </div>
+        <div className="rounded-2xl bg-[#111] border border-[#222] px-4 py-2 text-right">
+          <p className="text-[10px] text-[#888]">Wallet balance</p>
+          <p className="text-lg font-bold text-[#00ff88]">{money(balance)}</p>
+          <Link href="/dashboard?tab=wallet" className="text-[10px] text-[#00D4FF] underline">+ Add money</Link>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -83,10 +96,20 @@ export default function ScriptStore() {
                 ) : (
                   <button onClick={() => {
                     if (!myUser) { toast("Pehle login karo", "error"); return; }
-                    buyScript(s, myUser);
-                    toast(effectiveAccess(s) === "paid" ? `Purchase ho gaya ($${s.price}) — ab download karo` : "Plan me shamil hai — download karo", "success");
-                  }} className="px-4 py-2 rounded-full bg-[#6C5CE7] text-white text-xs font-medium">
-                    {effectiveAccess(s) === "paid" ? `Buy $${s.price}` : "Unlock"}
+                    setBuying(s.id);
+                    try {
+                      if (effectiveAccess(s) === "paid") {
+                        const err = purchaseWithWallet(s, myUser);
+                        if (err) { toast(err, "error"); return; }
+                        toast(`Kharid liya — ${money(s.price)} wallet se kata. Ab download karo ✅`, "success");
+                      } else {
+                        buyScript(s, myUser, "plan");
+                        toast("Plan me shamil hai — download karo", "success");
+                      }
+                      setBalance(walletOf(myUser.id).balance);
+                    } finally { setBuying(null); }
+                  }} className="px-4 py-2 rounded-full bg-[#6C5CE7] text-white text-xs font-medium disabled:opacity-50" disabled={buying === s.id}>
+                    {effectiveAccess(s) === "paid" ? (balance + 0.001 >= s.price ? `Buy ${money(s.price)}` : `Add money to buy`) : "Unlock"}
                   </button>
                 )}
               </div>
