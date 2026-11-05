@@ -31,6 +31,15 @@ export type DeployReport = {
   fixedSource?: string;      // agar auto-transform hua
   generatedFiles?: { name: string; content: string }[];
   bundle?: { path: string; content: string; type: string }[];
+  python?: {
+    tested: boolean;
+    syntaxOk: boolean;
+    loaded: boolean;
+    commands: string[];
+    replies: string[];
+    error: string;
+    entry?: string;
+  };
   startedAt: string;
   finishedAt: string;
 };
@@ -228,6 +237,48 @@ async function verifyTelegramToken(token: string): Promise<{ ok: boolean; userna
   }
 }
 
+/** Asli Python self-test: server pe user ki file REAL python me chalti hai */
+export async function pySelfTest(src: UploadedSource, text = "/start"): Promise<{
+  python: boolean; ok: boolean; syntaxOk: boolean; loaded: boolean;
+  commands: string[]; replies: string[]; error: string; checks: Check[]; entry?: string; tokenFound?: boolean;
+}> {
+  const files = src.files.map(f => ({ name: f.name, content: f.content }));
+  if (!files.some(f => /\.py$/i.test(f.name))) {
+    return { python: false, ok: true, syntaxOk: true, loaded: true, commands: [], replies: [], error: "", checks: [] };
+  }
+  try {
+    const res = await fetch("/api/py/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ files, text }),
+    });
+    const j = await res.json();
+    const checks: Check[] = (j.checks || []).map((c: any) => ({
+      code: c.code, title: c.title, detail: c.detail,
+      level: c.level as CheckLevel,
+      fixable: c.code === "PY_LOAD_ERR" ? true : false,
+    }));
+    return {
+      python: true,
+      ok: !!j.ok,
+      syntaxOk: !!j.syntax?.ok,
+      loaded: !!j.loaded,
+      commands: j.commands || [],
+      replies: j.replies || [],
+      error: j.error || "",
+      checks,
+      entry: j.entry,
+      tokenFound: !!j.tokenFound,
+    };
+  } catch (e: any) {
+    return {
+      python: true, ok: false, syntaxOk: true, loaded: false, commands: [], replies: [],
+      error: "runtime reachable nahi: " + (e?.message || ""),
+      checks: [{ code: "PY_RUNTIME", title: "Python runtime se connect nahi hua", detail: e?.message || "network", level: "warn", fixable: false }],
+    };
+  }
+}
+
 export async function runDeployChecks(src: UploadedSource): Promise<DeployReport> {
   const startedAt = new Date().toISOString();
   const checks: Check[] = [];
@@ -311,7 +362,7 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
 
   // 7. port binding
   if (entryFile && /listen\(\s*3000|port\s*=\s*3000|PORT\s*=\s*3000/.test(entryFile.content)) {
-    push({ code: "HARDCODED_PORT", title: "Port 3000 hardcoded", detail: "Hosting apna PORT deta hai — hardcoded port pe bind fail hota hai", level: "error", fixable: true });
+    push({ code: "HARDCODED_PORT", title: "Port 3000 hardcoded", detail: "Hosting apna PORT deta hai — auto-fix PORT env use karne ke liye patch kar dega", level: "warn", fixable: true });
   }
 
   // 8. TELEGRAM BOT -> asli verification
@@ -324,10 +375,10 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
     if (!token) {
       push({
         code: "NO_TOKEN",
-        title: "Bot token nahi mila — bot chat me online nahi aayega",
-        detail: "Code me BOT_TOKEN set nahi hai. @BotFather se token lo aur .env ya code me daalo (BOT_TOKEN=123456:ABC...)",
-        level: "error",
-        fixable: false,
+        title: "Bot token code me nahi mila",
+        detail: "Script host ho jayegi, par bot chat me online aane ke liye @BotFather ka token chahiye (BOT_TOKEN=123456:ABC...). Deploy form me token field me daal do — auto .env ban jayegi.",
+        level: "warn",
+        fixable: true,
       });
     } else {
       tokenMasked = maskToken(token);
@@ -336,7 +387,14 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
         botUsername = v.username;
         push({ code: "TOKEN_OK", title: `Bot verified: @${v.username}`, detail: v.detail, level: "ok", fixable: false });
       } else {
-        push({ code: "TOKEN_BAD", title: "Bot token invalid hai", detail: v.detail + " — @BotFather se naya token generate karo (purana revoke ho chuka hoga)", level: "error", fixable: false });
+        const hard = /unauthorized|not found|invalid|revoked/i.test(v.detail);
+        push({
+          code: hard ? "TOKEN_BAD" : "TOKEN_UNVERIFIED",
+          title: hard ? "Bot token Telegram ne reject kiya" : "Token verify nahi ho paya (network)",
+          detail: hard ? v.detail + " — @BotFather se naya token generate karo (purana revoke ho chuka hoga)" : v.detail + " — hosting pe bot phir bhi chalega; token sahi hai to chat me test karo",
+          level: hard ? "error" : "warn",
+          fixable: false,
+        });
       }
     }
   }
@@ -373,6 +431,22 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
     }
   }
 
+  // 11. REAL PYTHON SELF-TEST (asli CPython + asli handler execution)
+  let pythonInfo: DeployReport["python"];
+  if (src.files.some(f => /\.py$/i.test(f.name)) && typeof window !== "undefined") {
+    const py = await pySelfTest(src, "/start");
+    if (py.python) {
+      // syntax check ko asli parser se replace karo
+      const idx = checks.findIndex(c => c.code === "SYNTAX_OK" || c.code === "SYNTAX_ERR");
+      if (idx >= 0) checks.splice(idx, 1);
+      py.checks.forEach(c => { if (!checks.some(x => x.code === c.code)) checks.push(c); });
+      pythonInfo = {
+        tested: true, syntaxOk: py.syntaxOk, loaded: py.loaded,
+        commands: py.commands, replies: py.replies, error: py.error, entry: py.entry,
+      };
+    }
+  }
+
   const errors = checks.filter(c => c.level === "error");
   const warnings = checks.filter(c => c.level === "warn");
 
@@ -393,6 +467,7 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
     fileSize: src.totalBytes ? (src.totalBytes / 1024 / 1024).toFixed(2) + " MB" : `${(src.files.reduce((n, f) => n + f.content.length, 0) / 1024).toFixed(1)} KB`,
     files: src.files.map(f => f.name),
     entryFile: entry?.split("/").pop(),
+    python: pythonInfo,
     generatedFiles: generated.length ? generated : undefined,
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -400,7 +475,7 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
 }
 
 /** Auto-fix: jo fix ho sakta hai wo asli me apply karo, phir dobara verify karo */
-export async function autoFixAndVerify(src: UploadedSource, report: DeployReport): Promise<{ report: DeployReport; applied: string[] }> {
+export async function autoFixAndVerify(src: UploadedSource, report: DeployReport): Promise<{ report: DeployReport; applied: string[]; files: { name: string; content: string }[] }> {
   const applied: string[] = [];
   const files = src.files.map(f => ({ ...f }));
 
@@ -443,7 +518,7 @@ export async function autoFixAndVerify(src: UploadedSource, report: DeployReport
   }
 
   const next = await runDeployChecks({ ...src, files });
-  return { report: next, applied };
+  return { report: next, applied, files };
 }
 
 export function reportToSiteFields(r: DeployReport) {
@@ -458,6 +533,7 @@ export function reportToSiteFields(r: DeployReport) {
     botUsername: r.botUsername,
     tokenMasked: r.tokenMasked,
     fileCount: r.fileCount,
+    pythonTest: r.python,
     deployedAt: new Date().toISOString(),
   };
 }

@@ -221,7 +221,7 @@ export default function RunPage() {
         try { cmds = JSON.parse(cmdsRaw); } catch {}
         setDetected(cmds);
         push("sys", cmds.length ? `Detected commands: ${cmds.map(c => "/" + c).join(" ")}` : "Code me koi command handler nahi mila — default /start /help /price /status try karo");
-        setTimeout(() => runCommand("/start"), 400);
+        setTimeout(() => { void serverRun("/start"); }, 400);
       } catch (e: any) {
         setError(e?.message || "Python runtime start nahi hua");
         setBooting(false);
@@ -236,10 +236,38 @@ export default function RunPage() {
     outRef.current?.scrollTo({ top: outRef.current.scrollHeight });
   }, [log]);
 
-  const runCommand = (cmd: string) => {
-    if (!pyodide.current) return;
+  const serverRun = useCallback(async (cmd: string) => {
+    const src = (site?.src as { name: string; content: string }[]) || [];
+    const pyFiles = src.filter(f => /\.py$/i.test(f.name));
+    if (!pyFiles.length) return false;
+    push("sys", "Real Python (server, python3) me chala rahe hain...");
+    try {
+      const r = await fetch("/api/py/run", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ files: pyFiles, entry, text: cmd }),
+      });
+      const j = await r.json();
+      if ((j.replies || []).length) {
+        (j.replies as string[]).forEach(rep => push("out", "BOT REPLY: " + rep));
+        if (j.commands?.length) push("sys", "commands: " + j.commands.map((c: string) => "/" + c).join(" "));
+        return true;
+      }
+      if (j.logs?.length) { (j.logs as string[]).slice(-6).forEach(l => push("out", l)); return true; }
+      if (j.error) push("err", j.error);
+      push("sys", "Is command ka reply code me nahi mila — dusra command try karo");
+      return true;
+    } catch { return false; }
+  }, [site?.src, entry]);
+
+  const runCommand = async (cmd: string) => {
+    push("in", cmd);
+    const served = await serverRun(cmd);
+    if (served) return;
+    if (!pyodide.current) {
+      push("err", "Python runtime abhi ready nahi — 2 second wait karo");
+      return;
+    }
     const py = pyodide.current;
-    push("in", cmd.startsWith("/") ? cmd : cmd);
     try {
       const out = py.runPython(`handle(${JSON.stringify(cmd)})`);
       if (out && String(out).trim()) push("out", String(out).trim());
@@ -286,7 +314,14 @@ export default function RunPage() {
             <p className="text-[11px] text-[#888]">
               {site.botType || site.fileType} • {site.fileCount || files.length} files • {site.status}
             </p>
-            <p className="text-[10px] text-[#666] mt-1">Ye asli Python runtime hai (Pyodide) — tumhare project ka code browser me chal raha hai. Bot agar Telegram pe live hai to messages wahi se jaate hain.</p>
+            <p className="text-[10px] text-[#666] mt-1">
+              Asli Python runtime (server python3) me code chalta hai — commands real handlers se reply dete hain.
+              {(site as any)?.pythonTest?.tested && (
+                <> Test: {((site as any).pythonTest.loaded) ? "✅ load OK" : "❌ " + String((site as any).pythonTest.error).slice(0, 60)}
+                  {((site as any).pythonTest.commands || []).length ? " • commands: " + ((site as any).pythonTest.commands as string[]).map(c => "/" + c).join(" ") : ""}</>
+              )}
+              {site.botRuntime?.status === "online" && <> • Bot @{site.botUsername || site.botRuntime?.username} 24/7 server pe online</>}
+            </p>
           </div>
 
           {/* terminal */}

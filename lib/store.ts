@@ -107,11 +107,13 @@ export type Website = {
   checks?: { code: string; title: string; detail: string; level: "ok" | "warn" | "error"; fixable: boolean }[];
   bundle?: { path: string; content: string; type: string }[];
   src?: { name: string; content: string }[];
-  botRuntime?: { status: string; username?: string; responses?: number; lastReplyAt?: string; commands?: { trigger: string; reply: string; source: string }[] };
+  botRuntime?: { status: string; username?: string; responses?: number; lastReplyAt?: string; lastReplyMessage?: string; lastError?: string; commands?: { trigger: string; reply: string; source: string }[] };
   botUsername?: string;
   tokenMasked?: string;
   fileCount?: number;
   entryFile?: string;
+  pythonTest?: { tested: boolean; syntaxOk: boolean; loaded: boolean; commands: string[]; replies: string[]; error: string; entry?: string };
+  heartbeat?: { at: string; status: string; responses?: number; mode?: string };
   createdAt: string;
 };
 

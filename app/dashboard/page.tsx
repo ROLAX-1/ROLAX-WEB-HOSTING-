@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useStore, ADMIN_EMAIL, durationLabel, durationInDays, planTotal } from "@/lib/store";
 import { analyzeSite, autoFixSite, needsManualAction, detectFromFileName, MAX_ERRORS } from "@/lib/hosting";
-import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, extractTelegramToken, type DeployReport, type UploadedSource } from "@/lib/deploy";
+import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, extractTelegramToken, pySelfTest, type DeployReport, type UploadedSource } from "@/lib/deploy";
 import { saveBotToken, getBotToken, removeBotToken } from "@/lib/bottoken";
 import { extractCommands } from "@/lib/botruntime";
 import { useBotStatus, restartBot } from "@/components/BotWorker";
@@ -44,6 +44,7 @@ export default function DashboardPage() {
   const [gProfile, setGProfile] = useState<any>(null);
   const [deploying, setDeploying] = useState(false);
   const [deployProgress, setDeployProgress] = useState("");
+  const [autoFixNotes, setAutoFixNotes] = useState<string[]>([]);
   const [reportSite, setReportSite] = useState<any>(null);
   const [lastReport, setLastReport] = useState<DeployReport | null>(null);
   const [botPanelSite, setBotPanelSite] = useState<any>(null);
@@ -138,7 +139,34 @@ export default function DashboardPage() {
       return;
     }
     setDeployProgress("Code check + bot token verify ho raha hai...");
-    const report = await runDeployChecks(src);
+    let report = await runDeployChecks(src);
+
+    // ---- AUTO-FIX: jo fixable hai wo deploy se PEHLE khud theek karo (user ko 100% hosting mile) ----
+    const fixable = report.errors.concat(report.warnings).filter(c => c.fixable);
+    if (fixable.length) {
+      try {
+        setDeployProgress(`${fixable.length} issue auto-fix ho rahe hain...`);
+        const fixed = await autoFixAndVerify(src, report);
+        report = fixed.report;
+        if (fixed.files?.length) src = { ...src, files: fixed.files };
+        if (fixed.applied?.length) setAutoFixNotes(fixed.applied);
+      } catch { /* auto-fix fail -> original report hi rakho */ }
+    }
+
+    // ---- REAL PYTHON SELF-TEST: asli python me chalake dekho (crash-free?) ----
+    if (src.files.some(f => /\.py$/i.test(f.name))) {
+      setDeployProgress("Real Python runtime me test ho raha hai...");
+      const py = await pySelfTest(src, "/start");
+      if (py.python && py.loaded) {
+        report = {
+          ...report,
+          ok: true,
+          errors: report.errors.filter(e => e.code !== "PY_LOAD_ERR" && e.code !== "SYNTAX_ERR"),
+          python: { tested: true, syntaxOk: py.syntaxOk, loaded: true, commands: py.commands, replies: py.replies, error: py.error, entry: py.entry },
+        };
+      }
+    }
+
     setDeployProgress("Result save kar rahe hain...");
     const url = `${deployData.name.toLowerCase().replace(/\s+/g, "-")}.rolax.host`;
     const site: any = {
@@ -162,11 +190,34 @@ export default function DashboardPage() {
     setShowDeploy(false);
     setDeployData({ name: "", stack: "HTML", github: "", files: [] });
     setManualToken("");
-    // 24/7 runtime: token save + worker start
+    // 24/7 runtime: token save + SERVER-side watchdog register (browser band hone par bhi chalta rahe)
     const tk = extractTelegramToken(src);
     if (tk) {
       saveBotToken(site.id, tk);
       setTimeout(() => window.dispatchEvent(new Event("rolax:bot-start")), 300);
+      try {
+        const r = await fetch("/api/bots/register", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            siteId: site.id, token: tk, name: site.name, entry: report.entryFile || "bot.py",
+            files: src.files, ownerEmail: auth?.email,
+            expiresAt: (users.find((u: any) => u.id === auth?.id) as any)?.planExpiry,
+          }),
+        });
+        const j = await r.json();
+        if (j?.ok) {
+          setWebsites(websites.concat([site]).map((x: any) => x.id === site.id ? {
+            ...x,
+            botUsername: j.username || x.botUsername,
+            botRuntime: { status: "online", username: j.username, responses: 0, lastReplyAt: undefined, commands: (j.commands || []).map((c: string) => ({ trigger: c, reply: "", source: "bot.py" })) },
+            heartbeat: { at: new Date().toISOString(), status: "online", mode: j.mode },
+          } : x));
+          toast(`Bot @${j.username} 24/7 server pe live hai — browser band karo, phir bhi chalega ✅`, "success");
+        } else {
+          toast(`Hosting live hai ✅ par bot token Telegram ne reject kiya (${String(j?.error || "invalid token").slice(0, 60)}) — @BotFather se naya token daal ke redeploy karo`, "info");
+        }
+      } catch { /* server register fail -> client worker sambhal lega */ }
     }
     setReportSite(site);
     setLastReport(report);
@@ -738,8 +789,7 @@ export default function DashboardPage() {
               </div>
               <div className="flex gap-3">
                 <button onClick={() => setShowDeploy(false)} className="flex-1 py-3 rounded-full bg-black border border-[#222] text-sm">Cancel</button>
-                {/telegram|bot/i.test(detectFromFileName(deployData.files[0]?.name || "").fileType) && (
-              <div className="rounded-2xl bg-black border border-[#6C5CE7]/30 p-4">
+                <div className="rounded-2xl bg-black border border-[#6C5CE7]/30 p-4">
                 <label className="text-xs text-[#a89bff]">Bot Token (optional — bot ko 24/7 online karne ke liye)</label>
                 <input
                   value={manualToken}
@@ -747,9 +797,18 @@ export default function DashboardPage() {
                   placeholder="123456789:AAH... (BotFather se)"
                   className="mt-1 w-full px-4 py-3 rounded-xl bg-[#111] border border-[#222] text-sm font-mono text-xs"
                 />
-                <p className="text-[10px] text-[#666] mt-1">Token @BotFather se lo. Khali chhodo to code/.env se dhoondha jayega. Token sirf tumhare browser me save hota hai.</p>
+                <p className="text-[10px] text-[#666] mt-1">Token @BotFather se lo. Khali chhodo to code/.env se dhoondha jayega — mile to bot 24/7 server pe live ho jayega.</p>
+                {deployData.files.some(f => /\.py$/i.test(f.name)) && (
+                  <p className="text-[10px] text-[#00ff88] mt-2">🐍 Python file detected — deploy pe asli Python (python3) me chalake test hoga, syntax/import error khud fix honge.</p>
+                )}
               </div>
-            )}
+
+              {autoFixNotes.length > 0 && (
+                <div className="rounded-2xl bg-[#00ff88]/5 border border-[#00ff88]/25 p-3">
+                  <p className="text-[11px] text-[#00ff88] font-medium">Auto-fix applied ({autoFixNotes.length}):</p>
+                  <ul className="mt-1 space-y-0.5">{autoFixNotes.slice(0, 6).map((n, i) => <li key={i} className="text-[10px] text-[#9fe]">• {n}</li>)}</ul>
+                </div>
+              )}
 
             <button onClick={handleDeploy} disabled={deploying} className="flex-1 py-3 rounded-full bg-white text-black font-medium text-sm disabled:opacity-60">{deploying ? deployProgress || "Checking..." : "Deploy & Verify 🚀"}</button>
               </div>
@@ -860,8 +919,30 @@ export default function DashboardPage() {
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#888]">{lastReport.fileSize}</span>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-[#888]">entry: {lastReport.entryFile || "—"}</span>
                 </div>
-                {lastReport.botUsername && <p className="text-xs text-[#00ff88] mt-2">✓ Bot verified live: @{lastReport.botUsername} {lastReport.tokenMasked ? `(token ${lastReport.tokenMasked})` : ""}</p>}
-                {!lastReport.botUsername && (lastReport.botType.includes("Telegram")) && <p className="text-xs text-red-300 mt-2">✕ Bot token verify nahi hua — bot chat me online nahi aayega</p>}
+                {lastReport.botUsername && <p className="text-xs text-[#00ff88] mt-2">✓ Bot verified live: @{lastReport.botUsername} {lastReport.tokenMasked ? `(token ${lastReport.tokenMasked})` : ""} — 24/7 server pe chal raha hai</p>}
+                {!lastReport.botUsername && (lastReport.botType.includes("Telegram")) && (
+                  <p className="text-xs text-yellow-300 mt-2">
+                    ⚠ Bot token verify nahi hua{lastReport.tokenMasked ? "" : " (token nahi mila)"} — hosting chalu hai, token daalne pe bot chat me online ho jayega
+                  </p>
+                )}
+                {lastReport.python?.tested && (
+                  <div className="mt-2 rounded-xl bg-black border border-[#222] p-3">
+                    <p className="text-[11px] text-[#ccc]">
+                      🐍 <b>Real Python test:</b>{" "}
+                      <span className={lastReport.python.loaded ? "text-[#00ff88]" : "text-red-400"}>
+                        {lastReport.python.loaded ? "code load OK" : "load fail"}
+                      </span>{" "}
+                      <span className="text-[#666]">• syntax {lastReport.python.syntaxOk ? "valid" : "error"} • {(lastReport.python.commands || []).length} commands</span>
+                    </p>
+                    {(lastReport.python.commands || []).length > 0 && (
+                      <p className="text-[10px] text-[#00D4FF] mt-1">{(lastReport.python.commands || []).map(c => "/" + c).join("  ")}</p>
+                    )}
+                    {(lastReport.python.replies || []).length > 0 && (
+                      <p className="text-[10px] text-[#00ff88] mt-1">/start → &ldquo;{String(lastReport.python.replies[0]).slice(0, 90)}&rdquo;</p>
+                    )}
+                    {lastReport.python.error && <p className="text-[10px] text-yellow-400 mt-1">{lastReport.python.error.slice(0, 140)}</p>}
+                  </div>
+                )}
               </div>
               <button onClick={() => { setReportSite(null); setLastReport(null); }} className="w-8 h-8 rounded-full bg-black border border-[#222]">✕</button>
             </div>
@@ -1151,6 +1232,13 @@ function BotLivePanel({ site, onClose, onDeleted, can247, planLabel, expired, on
             </p>
             {rt?.username && <span className="text-xs text-[#00D4FF]">@{rt.username}</span>}
           </div>
+          <p className="text-[10px] text-[#8ab4ff] mt-1">
+            Runtime: {(site.heartbeat?.mode || "python") === "python" ? "asli Python (server python3)" : "Node.js"}
+            {site.heartbeat?.at ? ` • server heartbeat ${new Date(site.heartbeat.at).toLocaleTimeString()}` : " • server registration pending"}
+            {(site.pythonTest?.commands || []).length ? ` • ${site.pythonTest.commands.length} commands code se detect` : ""}
+            {site.botRuntime?.lastReplyMessage ? ` • last message: "${String(site.botRuntime.lastReplyMessage).slice(0, 30)}"` : ""}
+          </p>
+          {site.botRuntime?.lastError && <p className="text-[10px] text-yellow-400 mt-1">{String(site.botRuntime.lastError).slice(0, 120)}</p>}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3 text-center">
             <div className="rounded-xl bg-black border border-[#222] p-2">
               <p className="text-[10px] text-[#888]">Replies</p>

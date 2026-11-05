@@ -12,6 +12,7 @@ import { hasFeature, planStatusFor } from "@/lib/entitlements";
  * Same Telegram update do baar reply na kare iske liye server-side last-update guard + local lastId.
  */
 const POLL_MS = 4000;
+const SERVER_SYNC_MS = 8000;
 const LAST_KEY = "rolax_bot_last_ids";
 
 const state: Record<string, BotRuntimeState> = {};
@@ -36,6 +37,8 @@ export default function BotWorker() {
   useEffect(() => { hydrate(); }, [hydrate]);
 
   const pollOne = useCallback(async (site: Website) => {
+    // agar server watchdog is bot ko chala raha hai to client poll skip (double reply nahi hoga)
+    if (site.heartbeat?.mode === "python" && site.botRuntime?.status === "online") return;
     const token = getBotToken(site.id);
     if (!token) {
       state[site.id] = { ...(state[site.id] || { responses: 0, errors: 0, commands: [] }), status: "error", lastError: "Token missing — dobara deploy karo" };
@@ -94,6 +97,92 @@ export default function BotWorker() {
       state[site.id] = { ...state[site.id], status: "online", errors: (state[site.id].errors || 0) + 1, lastError: e?.message };
     }
   }, [websites]);
+
+  /** Server-side 24/7 watchdog ka status pull karo (bot browser band hone par bhi online) */
+  const serverSync = useCallback(async () => {
+    if (!hydrated) return;
+    try {
+      const r = await fetch("/api/bots/register", { cache: "no-store" });
+      const j = await r.json();
+      if (!j?.ok || !Array.isArray(j.bots)) return;
+      const byId: Record<string, any> = {};
+      // self-heal: registry khali/ephemeral ho to apne bots dobara register karo
+      const registered = new Set(j.bots.map((b: any) => b.siteId));
+      const mine = useStore.getState().websites.filter(w => /telegram/i.test(w.botType || "") && !registered.has(w.id) && getBotToken(w.id) && (w.src as any[])?.length);
+      for (const site of mine.slice(0, 5)) {
+        const token = getBotToken(site.id);
+        if (!token) continue;
+        fetch("/api/bots/register", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            siteId: site.id, token, name: site.name, entry: site.entryFile || "bot.py",
+            files: site.src, ownerEmail: site.userId,
+          }),
+        }).catch(() => {});
+      }
+
+      // self-heal: registry ephemeral ho to apne bots dobara register karo
+      try {
+        const registered = new Set((j.bots || []).map((b: any) => b.siteId));
+        const mine = useStore.getState().websites.filter(w => /telegram/i.test(w.botType || "") && !registered.has(w.id) && getBotToken(w.id) && (w.src as any[])?.length);
+        for (const site of mine.slice(0, 5)) {
+          const token = getBotToken(site.id);
+          if (!token) continue;
+          fetch("/api/bots/register", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ siteId: site.id, token, name: site.name, entry: site.entryFile || "bot.py", files: site.src, ownerEmail: site.userId }),
+          }).catch(() => {});
+        }
+      } catch { /* ignore */ }
+
+      j.bots.forEach((b: any) => { if (b?.siteId) byId[b.siteId] = b; });
+      const w = useStore.getState().websites;
+      let changed = false;
+      const next = w.map(site => {
+        const srv = byId[site.id];
+        if (!srv) return site;
+        const st = srv.stat || {};
+        changed = true;
+        return {
+          ...site,
+          botUsername: st.username || site.botUsername,
+          heartbeat: { at: st.checkedAt || new Date().toISOString(), status: st.status || "online", responses: st.responses || 0, mode: st.mode || "python" },
+          botRuntime: {
+            status: st.status || "online",
+            username: st.username || site.botRuntime?.username,
+            responses: st.responses || 0,
+            lastReplyAt: st.lastReplyAt,
+            lastReplyMessage: st.lastMessage,
+            lastError: st.lastError,
+            commands: site.botRuntime?.commands || [],
+          } as any,
+        };
+      });
+      if (changed) useStore.getState().setWebsites(next);
+      // local state bhi update karo taaki dashboard turant dikhaye
+      j.bots.forEach((b: any) => {
+        const st = b.stat || {};
+        if (!st.status) return;
+        state[b.siteId] = {
+          ...(state[b.siteId] || { responses: 0, errors: 0, commands: [] }),
+          status: st.status,
+          username: st.username,
+          responses: st.responses || 0,
+          lastReplyAt: st.lastReplyAt,
+          lastMessage: st.lastMessage,
+          lastError: st.lastError,
+        };
+      });
+      force(n => n + 1);
+    } catch { /* ignore */ }
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    serverSync();
+    const i = setInterval(serverSync, SERVER_SYNC_MS);
+    return () => clearInterval(i);
+  }, [hydrated, serverSync]);
 
   const tick = useCallback(async () => {
     if (!hydrated || running) return;
