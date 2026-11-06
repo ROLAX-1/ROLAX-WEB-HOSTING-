@@ -63,9 +63,17 @@ async def _process_update(payload: dict[str, Any]) -> None:
     app = module.build_application(lifecycle=False)
     await app.initialize()
     try:
+        # Serverless functions cannot keep asyncio.sleep tasks alive after the
+        # request ends. Drain any queued announcement before and after the
+        # update so scheduled admin broadcasts survive webhook cold starts.
+        process_due = getattr(module, "process_due_announcements", None)
+        if process_due:
+            await process_due(app.bot)
         update = Update.de_json(payload, app.bot)
         if update is not None:
             await app.process_update(update)
+        if process_due:
+            await process_due(app.bot)
     finally:
         await app.shutdown()
 

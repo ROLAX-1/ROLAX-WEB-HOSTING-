@@ -189,6 +189,7 @@ REDEEM_FILE = os.path.join(BASE_DIR, "redeem_codes.json")
 AUDIT_LOG_FILE = os.path.join(BASE_DIR, "audit_logs.txt")
 SESSION_LOG_FILE = os.path.join(BASE_DIR, "session_logs.txt")
 BUTTON_CLICK_LOG_FILE = os.path.join(BASE_DIR, "button_clicks.txt")
+SCHEDULE_FILE = os.path.join(BASE_DIR, "scheduled_announcements.json")
 HOSTED_DIR = os.path.join(BASE_DIR, "hosted_bots")
 LOGS_DIR = os.path.join(BASE_DIR, "bot_logs")
 
@@ -312,6 +313,73 @@ def get_config() -> dict:
     return load_json(CONFIG_FILE, default_cfg)
 
 def save_config(data: dict) -> None: save_json(CONFIG_FILE, data)
+
+def get_scheduled_announcements() -> list:
+    """Read pending admin announcements from a small durable queue.
+
+    A delayed asyncio task alone disappears when a webhook function is frozen
+    after one Telegram update. The queue survives that request and is drained
+    by the polling guardian or by the next webhook update.
+    """
+    value = load_json(SCHEDULE_FILE, [])
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict) and item.get("id") and item.get("message")]
+
+
+def save_scheduled_announcements(items: list) -> None:
+    save_json(SCHEDULE_FILE, items)
+
+
+def schedule_announcement(delay_minutes: float, message: str, created_by: int) -> dict:
+    now = time.time()
+    item = {
+        "id": "ann_" + str(int(now * 1000)),
+        "run_at": now + (delay_minutes * 60),
+        "message": message[:3900],
+        "created_by": int(created_by),
+        "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    pending = get_scheduled_announcements()
+    pending.append(item)
+    save_scheduled_announcements(pending)
+    return item
+
+
+async def process_due_announcements(bot) -> int:
+    """Deliver due announcements once and remove them from the queue first.
+
+    Removing before sending prevents duplicate broadcasts after a warm-runtime
+    retry. Individual blocked/deleted chats are skipped, while the audit log
+    records the attempted and successful counts.
+    """
+    pending = get_scheduled_announcements()
+    now = time.time()
+    due = [item for item in pending if float(item.get("run_at", 0) or 0) <= now]
+    if not due:
+        return 0
+    remaining = [item for item in pending if item not in due]
+    save_scheduled_announcements(remaining)
+    users = get_users()
+    delivered = 0
+    for item in due:
+        attempted = 0
+        sent = 0
+        for uid in users:
+            attempted += 1
+            try:
+                await bot.send_message(chat_id=int(uid), text="Scheduled Announcement:\n\n" + str(item.get("message", ""))[:3900])
+                sent += 1
+            except Exception:
+                pass
+            await asyncio.sleep(0.05)
+        delivered += sent
+        log_audit_action(
+            f"Executed Scheduled Announcement {item.get('id')} to {sent}/{attempted} users",
+            int(item.get("created_by") or ADMIN_ID),
+        )
+    return delivered
+
 
 def log_audit_action(action: str, admin_id: int = ADMIN_ID) -> None:
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -674,6 +742,24 @@ def spawn_background(coro) -> "asyncio.Task":
     BACKGROUND_TASKS.add(task)
     task.add_done_callback(BACKGROUND_TASKS.discard)
     return task
+
+
+async def scheduled_announcement_guardian(app: Application):
+    """Drain scheduled announcements in persistent polling mode.
+
+    On the Vercel webhook path the adapter calls process_due_announcements
+    around every update because serverless functions must not keep a sleeping
+    task alive between requests.
+    """
+    while True:
+        try:
+            await process_due_announcements(app.bot)
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Error in Scheduled Announcement Guardian: %s", e)
+            await asyncio.sleep(5)
 
 
 def next_bot_id(bots: dict) -> str:
@@ -2717,26 +2803,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 return
             try:
                 parts = text.split("|", 1)
-                delay_mins = int(parts[0].strip())
+                if len(parts) != 2 or not parts[1].strip():
+                    raise ValueError("message missing")
+                delay_mins = float(parts[0].strip())
                 ann_msg = parts[1].strip()
+                if delay_mins < 0 or delay_mins > 60 * 24 * 30:
+                    raise ValueError("delay out of range")
 
-                await safe_reply(update.message, f"Announcement Scheduled!\nIt will be broadcasted to all users after {delay_mins} minutes.")
-
-                async def delayed_broadcast():
-                    await asyncio.sleep(delay_mins * 60)
-                    all_u = get_users()
-                    cnt = 0
-                    for uid in all_u:
-                        try:
-                            await context.bot.send_message(int(uid), f"Scheduled Announcement:\n\n{ann_msg}")
-                            cnt += 1
-                        except Exception:
-                            pass
-                    log_audit_action(f"Executed Scheduled Announcement to {cnt} users: {ann_msg}", user.id)
-
-                spawn_background(delayed_broadcast())
+                item = schedule_announcement(delay_mins, ann_msg, user.id)
+                due = datetime.datetime.fromtimestamp(item["run_at"]).strftime("%d-%b-%Y %H:%M:%S")
+                await safe_reply(
+                    update.message,
+                    f"✅ Announcement scheduled.\n\n"
+                    f"🆔 {item['id']}\n"
+                    f"⏰ Delivery time: {due}\n"
+                    f"📢 Queue me save ho gaya — restart/webhook ke baad bhi nahi gayab hoga."
+                )
+                # A zero-minute schedule is useful for testing and should run
+                # immediately instead of waiting for a second update.
+                if delay_mins == 0:
+                    await process_due_announcements(context.bot)
             except Exception:
-                await safe_reply(update.message, "Invalid syntax. Use format: DELAY_MINUTES | MESSAGE")
+                await safe_reply(update.message, "Invalid syntax. Use: DELAY_MINUTES | MESSAGE (delay 0 se 43200 minutes)")
             return
 
         if context.user_data.pop("awaiting_add_credit", False):
@@ -3223,6 +3311,7 @@ async def post_init(app: Application) -> None:
     spawn_background(auto_fix_guardian_task(app))
     spawn_background(background_expiry_guardian(app))
     spawn_background(daily_reminder_guardian(app))
+    spawn_background(scheduled_announcement_guardian(app))
     spawn_background(startup_self_check(app))
 
     # Admin ko batao kaunsa bot/instance online hua - isse ye pata chalta hai
@@ -3333,6 +3422,7 @@ def main() -> None:
     get_admins()
     get_force_join()
     get_redeem_codes()
+    get_scheduled_announcements()
 
     bots = get_bots()
     for bid, binfo in bots.items():
