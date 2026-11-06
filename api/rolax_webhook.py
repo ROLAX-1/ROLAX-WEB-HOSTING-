@@ -85,6 +85,13 @@ async def _process_update(payload: dict[str, Any]) -> None:
             await app.process_update(update)
         if process_due:
             await process_due(app.bot)
+        # Persist context.user_data before the short-lived webhook app is
+        # closed. This is what carries a two-step panel action (button first,
+        # user ID/message second) into the next Telegram update.
+        try:
+            await app.update_persistence()
+        except Exception as exc:
+            print("ROLAX persistence update error:", type(exc).__name__, str(exc)[:300], file=sys.stderr)
     finally:
         await app.shutdown()
 

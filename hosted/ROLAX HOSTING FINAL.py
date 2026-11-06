@@ -160,6 +160,7 @@ try:
     from telegram.error import BadRequest, RetryAfter, InvalidToken
     from telegram.ext import (
         Application,
+        PicklePersistence,
         CommandHandler,
         CallbackQueryHandler,
         MessageHandler,
@@ -1112,6 +1113,60 @@ def get_user_max_bots(user_id: int) -> int:
     credits = u_data.get("credits", 1.0)
     return max(1, int(credits))
 
+
+def resolve_user_id(raw_value: str, users: Optional[dict] = None) -> Optional[str]:
+    """Resolve a numeric Telegram ID or a saved @username for admin actions."""
+    raw = str(raw_value or "").strip()
+    if raw.lstrip("-").isdigit():
+        value = int(raw)
+        return str(value) if value > 0 else None
+    username = raw.lstrip("@").strip().lower()
+    if not username:
+        return None
+    users = users if isinstance(users, dict) else get_users()
+    for uid, info in users.items():
+        saved = str((info or {}).get("username", "")).lstrip("@").strip().lower()
+        if saved and saved == username:
+            return str(uid)
+    return None
+
+
+def grant_premium(target: str, days: int) -> tuple[Optional[str], str]:
+    """Grant premium to an ID/@username, including a user who has not used /start.
+
+    Returning a message instead of raising keeps both the command and the
+    button flow user-visible when an admin enters a bad value.
+    """
+    if int(days) <= 0 or int(days) > 3650:
+        return None, "Days 1 se 3650 ke beech hone chahiye."
+    users = get_users()
+    target_uid = resolve_user_id(target, users)
+    raw = str(target or "").strip()
+    if not target_uid and raw.lstrip("-").isdigit() and int(raw) > 0:
+        # A valid Telegram ID may not have opened the bot yet. Store the grant
+        # now; it will still be present when that user sends /start later.
+        target_uid = str(int(raw))
+        users[target_uid] = {
+            "username": "N/A",
+            "name": "N/A",
+            "joined": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "banned": False,
+            "restricted": False,
+            "premium": False,
+            "premium_expiry": None,
+            "crash_alerts": True,
+            "autofix": True,
+            "referred_by": None,
+            "credits": 1.0,
+        }
+    if not target_uid:
+        return None, "User ID ya saved @username nahi mila. Numeric Telegram Chat ID use karo."
+    expiry_timestamp = time.time() + (int(days) * 86400)
+    users.setdefault(target_uid, {})["premium"] = True
+    users[target_uid]["premium_expiry"] = expiry_timestamp
+    save_users(users)
+    return target_uid, ""
+
 # ==================== COMMAND HANDLERS ====================
 
 # =====================================================================
@@ -1333,30 +1388,28 @@ async def add_premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     args = context.args
     if len(args) < 2:
-        await safe_reply(update.message, "Usage: /addpremium <user_chat_id> <days>\nExample: /addpremium 8472327599 30")
+        await safe_reply(update.message, "Usage: /addpremium <user_id_or_@username> <days>\nExample: /addpremium 8472327599 30")
         return
 
     try:
-        target_uid = str(int(args[0]))
+        target_uid, error = grant_premium(args[0], int(args[1]))
+        if error:
+            await safe_reply(update.message, error)
+            return
         days = int(args[1])
-        users = get_users()
-
-        if target_uid in users:
-            expiry_timestamp = time.time() + (days * 86400)
-            users[target_uid]["premium"] = True
-            users[target_uid]["premium_expiry"] = expiry_timestamp
-            save_users(users)
-
-            log_audit_action(f"Granted Premium VIP status to User ID {target_uid} for {days} days", user.id)
-            await safe_reply(update.message, f"Success! User {target_uid} has been upgraded to Premium VIP for {days} Days.")
-            try:
-                await context.bot.send_message(int(target_uid), f"Congratulations!\nYou have been upgraded to Premium VIP for {days} Days by Admin! 🚀")
-            except Exception:
-                pass
-        else:
-            await safe_reply(update.message, "User ID not found in database.")
-    except ValueError:
-        await safe_reply(update.message, "Invalid format. Provide numbers only for User ID and Days.")
+        log_audit_action(f"Granted Premium VIP status to User ID {target_uid} for {days} days", user.id)
+        await safe_reply(update.message, f"✅ User {target_uid} has been upgraded to Premium VIP for {days} days.")
+        try:
+            await context.bot.send_message(
+                int(target_uid),
+                f"Congratulations!\nYou have been upgraded to Premium VIP for {days} Days by Admin! 🚀"
+            )
+        except Exception:
+            # A user who has not opened the bot cannot receive a Telegram DM,
+            # but the premium grant remains saved for their first /start.
+            pass
+    except (TypeError, ValueError):
+        await safe_reply(update.message, "Invalid format. Use: USER_ID_OR_@USERNAME DAYS")
 
 # ==================== CALLBACK ROUTER ====================
 
@@ -2041,7 +2094,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "adm_give_premium" and is_admin(user.id):
         context.user_data["awaiting_give_prem"] = True
-        await safe_edit(query, "💎 Grant Timed Premium VIP\nSend format: USER_ID DAYS\nExample: 8472327599 30", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")]]))
+        await safe_edit(query, "💎 Grant Timed Premium VIP\nSend format: USER_ID or @USERNAME DAYS\nExample: 8472327599 30", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")]]))
 
     elif data == "adm_rem_premium" and is_admin(user.id):
         if int(user.id) != int(ADMIN_ID):
@@ -3103,26 +3156,26 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         elif context.user_data.pop("awaiting_give_prem", False):
             try:
                 parts = text.split()
-                target_uid = str(int(parts[0]))
+                if len(parts) < 2:
+                    raise ValueError("missing days")
+                target_uid, error = grant_premium(parts[0], int(parts[1]))
+                if error:
+                    await safe_reply(update.message, error)
+                    return
                 days = int(parts[1])
-                users = get_users()
-
-                if target_uid in users:
-                    expiry_timestamp = time.time() + (days * 86400)
-                    users[target_uid]["premium"] = True
-                    users[target_uid]["premium_expiry"] = expiry_timestamp
-                    save_users(users)
-
-                    log_audit_action(f"Granted Premium VIP via panel to User {target_uid} for {days} days", user.id)
-                    await safe_reply(update.message, f"User {target_uid} successfully upgraded to Premium VIP for {days} Days!")
-                    try:
-                        await context.bot.send_message(int(target_uid), f"Congratulations!\nYou have been granted Premium VIP status for {days} Days by the admin!")
-                    except Exception:
-                        pass
-                else:
-                    await safe_reply(update.message, "User ID not found.")
-            except Exception:
-                await safe_reply(update.message, "Invalid syntax. Use format: USER_ID DAYS")
+                log_audit_action(f"Granted Premium VIP via panel to User {target_uid} for {days} days", user.id)
+                await safe_reply(update.message, f"✅ User {target_uid} successfully upgraded to Premium VIP for {days} days.")
+                try:
+                    await context.bot.send_message(
+                        int(target_uid),
+                        f"Congratulations!\nYou have been granted Premium VIP status for {days} Days by the admin!"
+                    )
+                except Exception:
+                    # The grant is already saved even if Telegram cannot DM a
+                    # user who has not opened the bot yet.
+                    pass
+            except (TypeError, ValueError):
+                await safe_reply(update.message, "Invalid syntax. Use: USER_ID_OR_@USERNAME DAYS")
 
         elif context.user_data.pop("awaiting_rem_prem", False):
             if int(user.id) != int(ADMIN_ID):
@@ -3416,6 +3469,17 @@ def build_application(lifecycle: bool = True) -> Application:
     then shut it down. Normal VPS mode keeps the original lifecycle hooks.
     """
     builder = Application.builder().token(BOT_TOKEN)
+    # Webhook requests create a fresh PTB Application for every Telegram
+    # update. Without persistence, the first click (for example Give Premium)
+    # stores `awaiting_give_prem` only in that request and the user's next
+    # message arrives with an empty context, so the panel appears dead.
+    # Persist the small user-flow state so every multi-step admin action works
+    # across webhook requests as well as normal polling.
+    try:
+        persistence = PicklePersistence(filepath=os.path.join(BASE_DIR, "rolax_persistence"))
+        builder = builder.persistence(persistence)
+    except Exception as e:
+        logger.warning("Could not enable PTB persistence: %s", e)
     if lifecycle:
         builder = builder.post_init(post_init).post_shutdown(post_shutdown)
     app = builder.build()
