@@ -86,7 +86,7 @@ FORCE_JOIN_CHANNELS = ["-1003968777224", "-1003971286585"]
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.23"
+VERSION = "3.24"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -705,10 +705,15 @@ async def safe_answer(query, text: Optional[str] = None, show_alert: bool = Fals
 
 
 async def safe_edit(query, text: Optional[str] = None, reply_markup=None, parse_mode=None) -> bool:
-    """FIX: tapping the same button twice raised "BadRequest: Message is not
-    modified" and aborted the whole handler (dead button + error report to
-    admin). Also falls back to a fresh message when the old one cannot be
-    edited (e.g. it is a photo/caption message)."""
+    """Edit a callback message without leaving Telegram's loading spinner.
+
+    The old router answered every callback immediately with an empty answer.
+    Action-only buttons then tried to show their real success alert a second
+    time; Telegram rejects that second answer, so buttons like Stats, Restart,
+    Backup and admin toggles looked dead.  Edit screens answer here, while
+    alert-only branches answer themselves exactly when the action finishes.
+    """
+    await safe_answer(query)
     try:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
         return True
@@ -1269,8 +1274,6 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if config.get("maintenance_mode", False) and not is_admin(user.id) and not nav_only:
         await safe_answer(query, "System is under maintenance mode.", show_alert=True)
         return
-
-    await safe_answer(query)
 
     # BACK BUTTON FIX: a button press always ends any "type something" flow,
     # so Back can never leave the bot stuck in the previous screen's mode.

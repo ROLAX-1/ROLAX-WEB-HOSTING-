@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useRef } from "react";
@@ -63,12 +63,16 @@ export default function AdminPage() {
   }, [hydrated, serverRefresh]);
 
   // sach wala dirty tracking — pehli load pe snapshot banao, phir compare karo
+  // Track every admin-managed collection, not only the visual customizer.
+  // Earlier, user/payment/site/ticket changes were saved by the store but the
+  // header still said "Sab saved hai" and Discard could not restore them.
+  const allAdminState = useMemo(() => ({ settings, plans, features, stacks, wallets, websites, payments, tickets, users }), [settings, plans, features, stacks, wallets, websites, payments, tickets, users]);
   useEffect(() => {
     if (!hydrated) return;
-    const snap = JSON.stringify({ settings, plans, features, stacks, wallets });
+    const snap = JSON.stringify(allAdminState);
     if (!snapshot.current) { snapshot.current = snap; return; }
     setDirty(snap !== snapshot.current);
-  }, [hydrated, settings, plans, features, stacks, wallets]);
+  }, [hydrated, allAdminState]);
   useEffect(() => {
     const a = getAuth();
     if (!a || a.email !== ADMIN_EMAIL) { router.push("/login"); return; }
@@ -85,22 +89,19 @@ export default function AdminPage() {
     websites: "Website Manager", tickets: "Ticket Manager",
   };
 
-  const currentSnapshot = () => JSON.stringify({ settings, plans, features, stacks, wallets });
-
   const saveEverything = () => {
-    // sab kuch localStorage me forcibly likho (agar store miss hua ho to bhi)
+    // Store setters already persist individual edits. This button is the
+    // explicit all-data commit and now includes every admin-managed section.
     try {
-      localStorage.setItem("rolax_settings", JSON.stringify(settings));
-      localStorage.setItem("rolax_plans", JSON.stringify(plans));
-      localStorage.setItem("rolax_features", JSON.stringify(features));
-      localStorage.setItem("rolax_stacks", JSON.stringify(stacks));
-      localStorage.setItem("rolax_wallets", JSON.stringify(wallets));
-      localStorage.setItem("rolax_users", JSON.stringify(users));
+      const all = allAdminState;
+      Object.entries(all).forEach(([key, value]) => {
+        localStorage.setItem(`rolax_${key}`, JSON.stringify(value));
+      });
       window.dispatchEvent(new CustomEvent("rolax:sync", { detail: { key: "all" } }));
       setSavedAt(new Date().toLocaleTimeString());
-      snapshot.current = currentSnapshot();
+      snapshot.current = JSON.stringify(all);
       setDirty(false);
-      toast("✅ Sab settings save ho gayi — landing page pe turant live hai", "success");
+      toast("✅ Sab admin settings/data save ho gaya — landing page pe turant live hai", "success");
     } catch {
       toast("Save fail — dobara try karo", "error");
     }
@@ -115,6 +116,10 @@ export default function AdminPage() {
       if (prev.features) setFeatures(prev.features);
       if (prev.stacks) setStacks(prev.stacks);
       if (prev.wallets) setWallets(prev.wallets);
+      if (prev.websites) setWebsites(prev.websites);
+      if (prev.payments) setPayments(prev.payments);
+      if (prev.tickets) setTickets(prev.tickets);
+      if (prev.users) setUsers(prev.users);
       setDirty(false);
       toast("Changes discard — last saved state wapas", "info");
     } catch {}
@@ -220,7 +225,7 @@ export default function AdminPage() {
           <button onClick={() => { clearAuth(); router.push("/"); }} className="px-3 py-1 rounded-full bg-[#111] border border-[#222] text-xs">Logout</button>
         </div>
         <div className="md:hidden flex gap-2 p-3 overflow-x-auto border-b border-[#222] bg-black sticky top-[49px] z-30">
-          {["overview", "customizer", "offers", "store", "wallets", "stats", "features", "plans", "stacks", "wallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
+          {["overview", "customizer", "offers", "store", "wallets", "stats", "features", "plans", "stacks", "cryptowallets", "payments", "hosting", "users", "websites", "tickets"].map(id => (
             <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-full text-xs whitespace-nowrap ${tab === id ? "bg-white text-black" : "bg-[#111] border border-[#222] text-[#888]"}`}>{id}</button>
           ))}
         </div>
