@@ -8,7 +8,7 @@ import { analyzeSite, autoFixSite, needsManualAction, detectFromFileName, MAX_ER
 import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, extractTelegramToken, pySelfTest, type DeployReport, type UploadedSource } from "@/lib/deploy";
 import { saveBotToken, getBotToken, removeBotToken } from "@/lib/bottoken";
 import { extractCommands } from "@/lib/botruntime";
-import { useBotStatus, restartBot } from "@/components/BotWorker";
+import BotWorker, { useBotStatus, restartBot } from "@/components/BotWorker";
 import { hasFeature, planStatusFor, planEntitlements } from "@/lib/entitlements";
 import { toast } from "@/components/ui/Toaster";
 import { getOffers, offerLive, findOfferByCode, applyOffer, offerLabel } from "@/lib/offers";
@@ -312,6 +312,8 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-black text-white">
+      {/* User dashboard only: avoid polling Telegram from landing/login/admin pages. */}
+      <BotWorker />
       <OfferBanner />
       {/* Topbar */}
       <div style={{ top: "var(--banner-h, 0px)" }} className="sticky z-40 bg-black/80 backdrop-blur-xl border-b border-[#222]">

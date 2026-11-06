@@ -35,6 +35,7 @@ export default function AdminPage() {
   const [serverBots, setServerBots] = useState<any[]>([]);
   const [serverWebhook, setServerWebhook] = useState<string>("");
   const [serverBotsLoading, setServerBotsLoading] = useState(false);
+  const [serverBotsError, setServerBotsError] = useState("");
   const [serverRefresh, setServerRefresh] = useState(0);
   const snapshot = useRef<string>("");
 
@@ -50,11 +51,15 @@ export default function AdminPage() {
       try {
         const r = await fetch("/api/bots/register", { cache: "no-store" });
         const j = await r.json();
-        if (!dead && j?.ok) {
+        if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+        if (!dead) {
           setServerBots(Array.isArray(j.bots) ? j.bots : []);
           setServerWebhook(String(j.webhook || ""));
+          setServerBotsError("");
         }
-      } catch { /* admin page should remain usable if runtime is restarting */ }
+      } catch (e: any) {
+        if (!dead) setServerBotsError(String(e?.message || "Server status unavailable"));
+      }
       finally { if (!dead) setServerBotsLoading(false); }
     };
     loadServerBots();
@@ -956,6 +961,12 @@ export default function AdminPage() {
                     <a href="/api/bots/rolax/source" download className="px-3 py-1.5 rounded-full bg-white text-black text-[11px] font-semibold">Download .py</a>
                   </div>
                 </div>
+                {serverBotsError && (
+                  <div className="mt-3 rounded-xl border border-yellow-500/25 bg-yellow-500/5 p-3 text-xs text-yellow-200">
+                    Server status response nahi de raha: {serverBotsError}
+                    <button onClick={() => setServerRefresh(x => x + 1)} className="ml-2 underline">Retry</button>
+                  </div>
+                )}
                 {serverBots.filter(b => b?.siteId === "rolax-main-hosted").map((b: any) => {
                   const st = b.stat || {};
                   const live = !!serverWebhook || st.status === "online";
@@ -975,7 +986,7 @@ export default function AdminPage() {
                     </div>
                   );
                 })}
-                {!serverBots.some(b => b?.siteId === "rolax-main-hosted") && <p className="text-xs text-yellow-300 mt-3">Server registration load ho rahi hai — Refresh ya page reload karo.</p>}
+                {!serverBots.some(b => b?.siteId === "rolax-main-hosted") && !serverBotsError && <p className="text-xs text-yellow-300 mt-3">Server registration load ho rahi hai — Refresh ya page reload karo.</p>}
               </div>
 
               <div className="rounded-2xl bg-[#111] border border-[#222] overflow-hidden overflow-x-auto">

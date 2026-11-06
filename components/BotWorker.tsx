@@ -106,22 +106,9 @@ export default function BotWorker() {
       const j = await r.json();
       if (!j?.ok || !Array.isArray(j.bots)) return;
       const byId: Record<string, any> = {};
-      // self-heal: registry khali/ephemeral ho to apne bots dobara register karo
-      const registered = new Set(j.bots.map((b: any) => b.siteId));
-      const mine = useStore.getState().websites.filter(w => /telegram/i.test(w.botType || "") && !registered.has(w.id) && getBotToken(w.id) && (w.src as any[])?.length);
-      for (const site of mine.slice(0, 5)) {
-        const token = getBotToken(site.id);
-        if (!token) continue;
-        fetch("/api/bots/register", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            siteId: site.id, token, name: site.name, entry: site.entryFile || "bot.py",
-            files: site.src, ownerEmail: site.userId,
-          }),
-        }).catch(() => {});
-      }
-
-      // self-heal: registry ephemeral ho to apne bots dobara register karo
+      // Vercel functions are ephemeral. Re-register only missing user bots,
+      // and only once per sync round, so the admin/dashboard status request
+      // cannot fan out duplicate Telegram workers or POST requests.
       try {
         const registered = new Set((j.bots || []).map((b: any) => b.siteId));
         const mine = useStore.getState().websites.filter(w => /telegram/i.test(w.botType || "") && !registered.has(w.id) && getBotToken(w.id) && (w.src as any[])?.length);
