@@ -313,6 +313,11 @@ export async function GET(req: NextRequest) {
   loadDefaultBotFromEnvironment();
   const webhook = await ensureDefaultWebhook(req);
   startWatchdog();
+  // Do one synchronous health check before replying. Previously the first
+  // admin/dashboard request returned `stat: null` or `starting` and the UI
+  // appeared unresponsive until the next interval tick.
+  const defaultBot = g.bots.get(DEFAULT_SITE_ID);
+  if (defaultBot) await tickBot(defaultBot);
   return NextResponse.json({
     ok: true,
     watchdog: !!g.timer,
