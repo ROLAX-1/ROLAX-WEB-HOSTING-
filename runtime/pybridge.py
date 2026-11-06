@@ -85,6 +85,23 @@ class Obj:
     def __iter__(self):
         return iter(())
 
+    # PTB filters are combined with &, | and ~. A permissive filter object
+    # keeps real uploaded PTB v20/v21 files loadable without installing them.
+    def __or__(self, other):
+        return self
+
+    def __ror__(self, other):
+        return self
+
+    def __and__(self, other):
+        return self
+
+    def __rand__(self, other):
+        return self
+
+    def __invert__(self):
+        return self
+
     def __getattr__(self, name):
         if name.startswith("__"):
             raise AttributeError(name)
@@ -131,6 +148,8 @@ class Message(Obj):
 
 
 class Update(Obj):
+    ALL_TYPES = []
+
     def __init__(self, message=None, text="/start"):
         super().__init__()
         self.message = message or Message(text)
@@ -353,11 +372,24 @@ def install_stubs():
 
     # ---- python-telegram-bot ----
     def commandhandler(cmd, fn, *a, **k):
-        _register("message", [str(cmd)], False, fn)
+        # PTB accepts either "start" or ["back", "home", ...].
+        cmds = list(cmd) if isinstance(cmd, (list, tuple, set)) else [cmd]
+        cmds = [str(c).lstrip("/") for c in cmds if c]
+        _register("message", cmds, False, fn)
         return Obj(callback=fn, command=cmd)
 
-    def messagehandler(filt, fn, *a, **k):
+    def messagehandler(filt=None, fn=None, *a, **k):
+        fn = fn or k.get("callback") or k.get("handler")
+        if fn is None:
+            return Obj()
         _register("message", [], True, fn)
+        return Obj(callback=fn)
+
+    def callbackhandler(fn=None, *a, **k):
+        fn = fn or k.get("callback") or k.get("handler")
+        if fn is None:
+            return Obj()
+        _register("callback", [], True, fn)
         return Obj(callback=fn)
 
     class _App:
@@ -410,14 +442,36 @@ def install_stubs():
         def build():
             return _App()
 
-    tg = _mkmod("telegram", Bot=BotStub, Update=Update, Message=Message, BotCommand=Obj)
+    class _TelegramButton(Obj):
+        def __init__(self, text="", **kw):
+            super().__init__(text=text, **kw)
+
+    class _TelegramMarkup(Obj):
+        def __init__(self, keyboard=None, **kw):
+            super().__init__(inline_keyboard=keyboard or [], keyboard=keyboard or [], **kw)
+
+    tg = _mkmod(
+        "telegram", Bot=BotStub, Update=Update, Message=Message, BotCommand=Obj,
+        InlineKeyboardButton=_TelegramButton, InlineKeyboardMarkup=_TelegramMarkup,
+        ReplyKeyboardMarkup=_TelegramMarkup, ReplyKeyboardRemove=Obj,
+        KeyboardButton=_TelegramButton, InputFile=Obj, Chat=Obj, User=Obj,
+        constants=Obj(), __version__="21.11.1",
+    )
     tgext = _mkmod("telegram.ext", Application=Application, CommandHandler=commandhandler,
-                   MessageHandler=messagehandler, CallbackQueryHandler=messagehandler,
-                   ContextTypes=Obj(), filters=Obj(), ConversationHandler=Obj(),
+                   MessageHandler=messagehandler, CallbackQueryHandler=callbackhandler,
+                   ContextTypes=Obj(DEFAULT_TYPE=Obj), filters=Obj(), ConversationHandler=Obj(),
                    PicklePersistence=Obj)
     tg.ext = tgext
-    sys.modules["telegram.error"] = _mkmod("telegram.error", InvalidToken=Exception, NetworkError=Exception,
-                                           TelegramError=Exception, BadRequest=Exception)
+    class _TelegramError(Exception):
+        pass
+    class _RetryAfter(_TelegramError):
+        retry_after = 0
+    class _BadRequest(_TelegramError):
+        pass
+    sys.modules["telegram.error"] = _mkmod("telegram.error", InvalidToken=_TelegramError,
+                                           NetworkError=_TelegramError, TelegramError=_TelegramError,
+                                           BadRequest=_BadRequest, RetryAfter=_RetryAfter,
+                                           Forbidden=_TelegramError, Conflict=_TelegramError)
 
     # ---- aiogram ----
     class Command:

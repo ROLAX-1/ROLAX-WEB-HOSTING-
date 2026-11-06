@@ -34,3 +34,12 @@ stdout ki last line: `###RESULT###{json}`
   Always-on process ke liye VPS/EC2 pe deploy karo (`npx next start` + watchdog interval).
 - `bot.stop_polling()` / koi bhi network call asli internet maangti hai; sandbox me DNS band ho to
   woh call fail hoti hai par file phir bhi load hoti hai.
+
+## Preloaded ROLAX bot
+`hosted/ROLAX HOSTING FINAL.py` is the uploaded ROLAX manager bot after safe fixes:
+- repository copy me Telegram token nahi hai; production Vercel secret `ROLAX_MAIN_BOT_TOKEN` se inject hota hai;
+- `python-telegram-bot==21.11.1` / `psutil` dependency path tested hai;
+- crash loop me file ya `bots.json` delete nahi hota; backoff ke saath retry hota hai;
+- PTB inline keyboards, filters, callback handlers aur list command handlers bridge me supported hain.
+
+Vercel Hobby par cron maximum daily hai; minute-level cron/true always-on watchdog ke liye Pro ya persistent VPS worker chahiye.

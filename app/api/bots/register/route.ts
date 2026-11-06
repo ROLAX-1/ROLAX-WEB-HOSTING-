@@ -43,6 +43,9 @@ const PY = process.env.PYTHON_BIN || "python3";
 const BRIDGE = path.join(process.cwd(), "runtime", "pybridge.py");
 const API = process.env.TELEGRAM_API_BASE || "https://api.telegram.org";
 const TICK_MS = 5000;
+const DEFAULT_SITE_ID = "rolax-main-hosted";
+const DEFAULT_ENTRY = "ROLAX HOSTING FINAL.py";
+const DEFAULT_SOURCE = path.join(process.cwd(), "hosted", DEFAULT_ENTRY);
 
 type G = {
   bots: Map<string, Reg>;
@@ -55,6 +58,26 @@ type G = {
 const g: G = ((globalThis as any).__rolaxBotWatchdog ||= {
   bots: new Map(), stats: new Map(), busy: new Set(), loaded: false,
 });
+
+function loadDefaultBotFromEnvironment() {
+  const token = String(process.env.ROLAX_MAIN_BOT_TOKEN || "").trim();
+  if (!/^\d{6,12}:[A-Za-z0-9_-]{20,60}$/.test(token) || g.bots.has(DEFAULT_SITE_ID)) return;
+  try {
+    if (!existsSync(DEFAULT_SOURCE)) return;
+    const content = readFileSync(DEFAULT_SOURCE, "utf8");
+    g.bots.set(DEFAULT_SITE_ID, {
+      siteId: DEFAULT_SITE_ID,
+      token,
+      name: "ROLAX HOSTING FINAL",
+      entry: DEFAULT_ENTRY,
+      files: [{ name: DEFAULT_ENTRY, content }],
+      ownerEmail: process.env.ROLAX_OWNER_EMAIL || "",
+      addedAt: new Date().toISOString(),
+    });
+    saveToDisk();
+  } catch { /* source/env may be unavailable during a partial build */ }
+}
+
 
 function loadFromDisk() {
   if (g.loaded) return;
@@ -238,6 +261,7 @@ export async function POST(req: NextRequest) {
 
 export async function GET() {
   loadFromDisk();
+  loadDefaultBotFromEnvironment();
   startWatchdog();
   return NextResponse.json({
     ok: true,
