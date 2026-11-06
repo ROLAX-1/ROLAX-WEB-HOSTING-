@@ -32,10 +32,35 @@ export default function AdminPage() {
   const [viewFile, setViewFile] = useState<{ name: string; content: string } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<string>("");
+  const [serverBots, setServerBots] = useState<any[]>([]);
+  const [serverWebhook, setServerWebhook] = useState<string>("");
+  const [serverBotsLoading, setServerBotsLoading] = useState(false);
+  const [serverRefresh, setServerRefresh] = useState(0);
   const snapshot = useRef<string>("");
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { setGClientId(getGoogleClientId()); }, []);
+
+  // Server-side 24/7 registry bhi dikhao — ye browser localStorage se alag hai.
+  useEffect(() => {
+    if (!hydrated) return;
+    let dead = false;
+    const loadServerBots = async () => {
+      setServerBotsLoading(true);
+      try {
+        const r = await fetch("/api/bots/register", { cache: "no-store" });
+        const j = await r.json();
+        if (!dead && j?.ok) {
+          setServerBots(Array.isArray(j.bots) ? j.bots : []);
+          setServerWebhook(String(j.webhook || ""));
+        }
+      } catch { /* admin page should remain usable if runtime is restarting */ }
+      finally { if (!dead) setServerBotsLoading(false); }
+    };
+    loadServerBots();
+    const timer = window.setInterval(loadServerBots, 10000);
+    return () => { dead = true; window.clearInterval(timer); };
+  }, [hydrated, serverRefresh]);
 
   // sach wala dirty tracking — pehli load pe snapshot banao, phir compare karo
   useEffect(() => {
@@ -909,8 +934,43 @@ export default function AdminPage() {
                 </div>
                 <div className="rounded-xl bg-[#111] border border-[#222] p-3">
                   <p className="text-xs text-[#888]">Total Hosted</p>
-                  <p className="text-lg font-bold">{websites.length} files</p>
+                  <p className="text-lg font-bold">{websites.length + serverBots.filter(b => b?.siteId === "rolax-main-hosted").length} files</p>
                 </div>
+              </div>
+
+              {/* Repo-backed / server-side bot: localStorage me nahi, actual website runtime pe */}
+              <div className="rounded-2xl bg-[#07130e] border border-[#00ff88]/25 p-4">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-grotesk font-bold text-[#00ff88]">🟢 Server 24/7 Hosting</h3>
+                    <p className="text-xs text-[#8aa596] mt-1">Admin se controlled runtime — browser band hone par bhi Telegram webhook live rehta hai.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {serverWebhook && <span className="text-[10px] px-2 py-1 rounded-full bg-[#00ff88]/10 text-[#00ff88] border border-[#00ff88]/20">Webhook active</span>}
+                    <span className="text-[10px] text-[#777]">{serverBotsLoading ? "checking..." : `${serverBots.length} server registration(s)`}</span>
+                    <a href="/api/bots/rolax/source" download className="px-3 py-1.5 rounded-full bg-white text-black text-[11px] font-semibold">Download .py</a>
+                  </div>
+                </div>
+                {serverBots.filter(b => b?.siteId === "rolax-main-hosted").map((b: any) => {
+                  const st = b.stat || {};
+                  const live = !!serverWebhook || st.status === "online";
+                  return (
+                    <div key={b.siteId} className="mt-3 rounded-xl bg-black/60 border border-[#00ff88]/15 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold">{b.name || "ROLAX HOSTING FINAL"}</p>
+                        <p className="text-[11px] text-[#888] mt-1">Entry: {b.entry || "ROLAX HOSTING FINAL.py"} • {b.files || 1} file • Python • server-side</p>
+                        <p className="text-[11px] mt-1 text-[#00D4FF]">{st.username ? `@${st.username}` : "ROLAX Telegram bot"} • {serverWebhook || "runtime registered"}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-3 py-1 rounded-full text-xs ${live ? "bg-[#00ff88]/10 text-[#00ff88] border border-[#00ff88]/20" : "bg-yellow-500/10 text-yellow-300 border border-yellow-500/20"}`}>
+                          {live ? "● ONLINE — 24/7" : `◐ ${st.status || "starting"}`}
+                        </span>
+                        <button onClick={() => { setServerRefresh(x => x + 1); toast("Server bot status refreshed", "success"); }} className="px-3 py-1 rounded-full bg-[#222] text-xs">Refresh</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!serverBots.some(b => b?.siteId === "rolax-main-hosted") && <p className="text-xs text-yellow-300 mt-3">Server registration load ho rahi hai — Refresh ya page reload karo.</p>}
               </div>
 
               <div className="rounded-2xl bg-[#111] border border-[#222] overflow-hidden overflow-x-auto">
