@@ -19,7 +19,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "hosted" / "ROLAX HOSTING FINAL.py"
-DATA_DIR = Path("/tmp/rolax-main-data")
+# Vercel's /tmp is the safe default. A persistent volume/host can provide
+# ROLAX_DATA_DIR without changing the bot source.
+DATA_DIR = Path(os.environ.get("ROLAX_DATA_DIR") or "/tmp/rolax-main-data")
 MODULE = None
 
 
@@ -63,6 +65,15 @@ async def _process_update(payload: dict[str, Any]) -> None:
     app = module.build_application(lifecycle=False)
     await app.initialize()
     try:
+        # `post_init` is intentionally disabled for one-shot webhook requests,
+        # but the bot identity is still needed by referral links and panel
+        # screens. Populate it once after PTB has initialized the Bot object.
+        if not getattr(module, "BOT_USERNAME", ""):
+            try:
+                me = await app.bot.get_me()
+                module.BOT_USERNAME = (getattr(me, "username", "") or "").strip()
+            except Exception:
+                pass
         # Serverless functions cannot keep asyncio.sleep tasks alive after the
         # request ends. Drain any queued announcement before and after the
         # update so scheduled admin broadcasts survive webhook cold starts.

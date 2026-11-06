@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =====================================================================
-#  ROLAX HOSTING V2  -  v3.23   (SINGLE FILE BUILD)
+#  ROLAX HOSTING V2  -  v3.24   (SINGLE FILE BUILD)
 # ---------------------------------------------------------------------
 #  Chalane ka tarika:
 #       python3 ROLAX_HOSTING_FINAL.py
@@ -319,12 +319,23 @@ def get_scheduled_announcements() -> list:
 
     A delayed asyncio task alone disappears when a webhook function is frozen
     after one Telegram update. The queue survives that request and is drained
-    by the polling guardian or by the next webhook update.
+    by the polling guardian or by the next webhook update. Malformed queue
+    records are ignored so one bad schedule can never break the admin panel.
     """
     value = load_json(SCHEDULE_FILE, [])
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, dict) and item.get("id") and item.get("message")]
+    clean = []
+    for item in value:
+        if not isinstance(item, dict) or not item.get("id") or not item.get("message"):
+            continue
+        try:
+            item["run_at"] = float(item.get("run_at", 0) or 0)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring malformed scheduled announcement %r", item.get("id"))
+            continue
+        clean.append(item)
+    return clean
 
 
 def save_scheduled_announcements(items: list) -> None:
@@ -781,11 +792,29 @@ def sanitize_filename(name: Optional[str]) -> str:
     return base or "bot.py"
 
 
+TELEGRAM_TEXT_LIMIT = 4096
+TELEGRAM_ALERT_LIMIT = 200
+
+
+def _telegram_text(value: Optional[str], limit: int = TELEGRAM_TEXT_LIMIT) -> str:
+    """Keep every panel response inside Telegram's hard message limit.
+
+    Large audit/log/file panels used to fail with Telegram's 400
+    ``Message_too_long`` response. That made the button look completely dead.
+    Long screens are now visibly truncated instead of failing silently.
+    """
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    suffix = "\n\n… output truncated"
+    return text[:max(0, limit - len(suffix))] + suffix
+
+
 async def safe_answer(query, text: Optional[str] = None, show_alert: bool = False) -> None:
-    """FIX: answering the same callback twice raised BadRequest and aborted the
-    handler with a traceback. Every answer now goes through this wrapper."""
+    """Answer a callback safely, including repeated/oversized answers."""
     try:
-        await query.answer(text=text, show_alert=show_alert)
+        answer = _telegram_text(text, TELEGRAM_ALERT_LIMIT) if text else text
+        await query.answer(text=answer, show_alert=show_alert)
     except Exception:
         pass
 
@@ -796,12 +825,17 @@ async def safe_edit(query, text: Optional[str] = None, reply_markup=None, parse_
     The old router answered every callback immediately with an empty answer.
     Action-only buttons then tried to show their real success alert a second
     time; Telegram rejects that second answer, so buttons like Stats, Restart,
-    Backup and admin toggles looked dead.  Edit screens answer here, while
+    Backup and admin toggles looked dead. Edit screens answer here, while
     alert-only branches answer themselves exactly when the action finishes.
+    Oversized log/file panels are clipped before Telegram rejects them.
     """
     await safe_answer(query)
+    rendered = _telegram_text(text)
+    # A clipped Markdown message can end in an unmatched formatting marker.
+    # Send it as plain text so the user still receives the panel response.
+    rendered_parse_mode = parse_mode if rendered == str(text or "") else None
     try:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        await query.edit_message_text(text=rendered, reply_markup=reply_markup, parse_mode=rendered_parse_mode)
         return True
     except BadRequest as e:
         low = str(e).lower()
@@ -811,13 +845,13 @@ async def safe_edit(query, text: Optional[str] = None, reply_markup=None, parse_
         # Editing their "text" always fails, so the Back button looked dead.
         # Try editing the caption first, then fall back to a brand new message.
         try:
-            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await query.edit_message_caption(caption=rendered, reply_markup=reply_markup, parse_mode=rendered_parse_mode)
             return True
         except Exception:
             pass
         try:
             await query.message.chat.send_message(
-                text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+                text=rendered, reply_markup=reply_markup, parse_mode=rendered_parse_mode)
             return True
         except Exception as inner:
             logger.warning("Could not edit or resend message: %s", inner)
@@ -826,7 +860,7 @@ async def safe_edit(query, text: Optional[str] = None, reply_markup=None, parse_
         logger.warning("Flood control on edit, retrying after %s", e.retry_after)
         try:
             await asyncio.sleep(float(e.retry_after))
-            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await query.edit_message_text(text=rendered, reply_markup=reply_markup, parse_mode=rendered_parse_mode)
             return True
         except Exception:
             return False
@@ -902,20 +936,19 @@ async def render_main_menu(query, user, context) -> None:
 
 
 async def safe_reply(message, text: Optional[str] = None, reply_markup=None, parse_mode=None):
-    """FIX (live traffic se mila): agar user apna message delete kar de, ya
-    Telegram reply target na mile, to `reply_text` 400 "Message to be replied
-    not found" deta hai aur poora handler crash ho jaata hai. Yahan fallback
-    hamesha normal send_message pe jaata hai, isliye reply kabhi fail nahi hota."""
+    """Reply safely when the original message is gone or the panel is large."""
+    rendered = _telegram_text(text)
+    rendered_parse_mode = parse_mode if rendered == str(text or "") else None
     try:
-        return await message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return await message.reply_text(rendered, reply_markup=reply_markup, parse_mode=rendered_parse_mode)
     except Exception as first_err:
         try:
             bot_obj = message.get_bot()
             if asyncio.iscoroutine(bot_obj):
                 bot_obj = await bot_obj
             return await bot_obj.send_message(
-                chat_id=message.chat_id, text=text,
-                reply_markup=reply_markup, parse_mode=parse_mode)
+                chat_id=message.chat_id, text=rendered,
+                reply_markup=reply_markup, parse_mode=rendered_parse_mode)
         except Exception as second_err:
             logger.warning("safe_reply failed (%s / %s)", first_err, second_err)
             return None
@@ -1247,7 +1280,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     role_title = "SUPER ADMIN" if int(user.id) == int(ADMIN_ID) else "SUB-ADMIN"
 
     text = (
-        f"EXCLUSIVE ROLAX {role_title} CONTROL CENTER v3.18\n"
+        f"EXCLUSIVE ROLAX {role_title} CONTROL CENTER v{VERSION}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Administrator: @{user.username or user.id} (ID: {user.id})\n"
         f"Registered Users: {len(users)}\n"
@@ -2278,7 +2311,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         role_title = "SUPER ADMIN" if int(user.id) == int(ADMIN_ID) else "SUB-ADMIN"
 
         text = (
-            f"EXCLUSIVE ROLAX {role_title} CONTROL CENTER v3.18\n"
+            f"EXCLUSIVE ROLAX {role_title} CONTROL CENTER v{VERSION}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"Administrator: @{user.username or user.id} (ID: {user.id})\n"
             f"Registered Users: {len(users)}\n"
