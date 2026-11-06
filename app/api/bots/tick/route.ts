@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Vercel Cron -> GET /api/bots/tick (har minute)
+ * Vercel Cron -> GET /api/bots/tick (Hobby par daily; Pro par frequent)
  * Serverless pe setInterval zinda nahi rehta, isliye cron watchdog ka ek round chalata hai.
  */
 export async function GET(req: NextRequest) {
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
   }
-  const list = await (await registryGet()).json();
+  const list = await (await registryGet(req)).json();
   return NextResponse.json({
     ok: true,
     tickedAt: new Date().toISOString(),

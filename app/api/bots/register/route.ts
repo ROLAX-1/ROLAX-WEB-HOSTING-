@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "node:child_process";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
@@ -154,6 +155,38 @@ async function tg(token: string, method: string, payload?: any) {
   }
 }
 
+function webhookSecret(token: string) {
+  return createHash("sha256").update(`rolax-webhook:${token}`).digest("hex").slice(0, 32);
+}
+
+function publicOrigin(req: NextRequest) {
+  const configured = process.env.ROLAX_WEBHOOK_BASE_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || req.nextUrl.origin;
+  const value = String(configured || "").trim();
+  if (!value) return "";
+  return value.startsWith("http://") || value.startsWith("https://") ? value : `https://${value}`;
+}
+
+/** Vercel par default ROLAX bot ko polling ke bajaye event-driven webhook do. */
+async function ensureDefaultWebhook(req: NextRequest) {
+  const reg = g.bots.get(DEFAULT_SITE_ID);
+  if (!reg) return { ok: false, url: "" };
+  const origin = publicOrigin(req);
+  // localhost/preview se Telegram ko webhook set karna bekaar hai.
+  if (!origin || /localhost|127\.0\.0\.1/.test(origin)) return { ok: false, url: "" };
+  const url = `${origin.replace(/\/$/, "")}/api/rolax_webhook`;
+  const info = await tg(reg.token, "getWebhookInfo");
+  if (info?.result?.url !== url || info?.result?.has_custom_certificate) {
+    const set = await tg(reg.token, "setWebhook", {
+      url,
+      drop_pending_updates: false,
+      secret_token: webhookSecret(reg.token),
+      allowed_updates: ["message", "edited_message", "callback_query", "channel_post"],
+    });
+    if (!set?.ok) return { ok: false, url, error: set?.description || "setWebhook failed" };
+  }
+  return { ok: true, url };
+}
+
 async function tickBot(reg: Reg) {
   if (g.busy.has(reg.siteId)) return;
   g.busy.add(reg.siteId);
@@ -168,8 +201,14 @@ async function tickBot(reg: Reg) {
       setStat(reg.siteId, { status: "error", lastError: me?.description || "Token invalid" });
       return;
     }
-    // webhook laga ho to polling fail hoti hai -> auto hatao
     const wh = await tg(reg.token, "getWebhookInfo");
+    // Preloaded ROLAX bot is event-driven on Vercel. Never delete its webhook
+    // and never start getUpdates for it (that would create a 409 conflict).
+    if (reg.siteId === DEFAULT_SITE_ID && /\/api\/rolax_webhook$/.test(String(wh?.result?.url || ""))) {
+      setStat(reg.siteId, { status: "online", username: me.result?.username, mode: "python" });
+      return;
+    }
+    // User-uploaded polling bots: an old webhook would block getUpdates.
     if (wh?.result?.url) await tg(reg.token, "deleteWebhook", { drop_pending_updates: false });
 
     const upd = await tg(reg.token, `getUpdates?offset=${(prev?.updateOffset || 0) + 1}&limit=20&timeout=0`);
@@ -259,14 +298,16 @@ export async function POST(req: NextRequest) {
   });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   loadFromDisk();
   loadDefaultBotFromEnvironment();
+  const webhook = await ensureDefaultWebhook(req);
   startWatchdog();
   return NextResponse.json({
     ok: true,
     watchdog: !!g.timer,
     count: g.bots.size,
+    webhook: webhook.ok ? webhook.url : undefined,
     bots: [...g.bots.values()].map(b => ({ siteId: b.siteId, name: b.name, entry: b.entry, files: b.files.length, stat: g.stats.get(b.siteId) || null })),
   });
 }

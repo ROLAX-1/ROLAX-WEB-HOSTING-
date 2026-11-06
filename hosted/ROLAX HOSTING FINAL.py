@@ -3283,6 +3283,40 @@ async def startup_self_check(app: Application) -> None:
     except Exception as e:
         logger.warning("Startup self-check failed: %s", e)
 
+def build_application(lifecycle: bool = True) -> Application:
+    """Create the same handlers for polling and Vercel webhook execution.
+
+    Webhook requests must not start background guardians or run_polling; they
+    initialize one short-lived PTB application, process one Telegram update,
+    then shut it down. Normal VPS mode keeps the original lifecycle hooks.
+    """
+    builder = Application.builder().token(BOT_TOKEN)
+    if lifecycle:
+        builder = builder.post_init(post_init).post_shutdown(post_shutdown)
+    app = builder.build()
+
+    # =================================================================
+    #  ##  HANDLER REGISTRATION  ##  (kaun si command kis function pe)
+    # =================================================================
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler(["back", "Back", "home", "cancel", "Cancel"], menu_command))
+    app.add_handler(CommandHandler(["redeem", "Redeem", "REDEEM"], redeem_command))
+    app.add_handler(CommandHandler(["admin", "Admin", "ADMIN"], admin_command))
+    app.add_handler(CommandHandler("addadmin", add_admin_command))
+    app.add_handler(CommandHandler("addpremium", add_premium_command))
+    app.add_handler(CommandHandler(["help", "h", "commands", "support", "info", "about"], help_command))
+
+    app.add_handler(CallbackQueryHandler(callback_query_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.VIDEO | filters.ANIMATION | filters.VIDEO_NOTE, handle_video))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    # sabse aakhir: koi bhi bachi hui command (/START, /start@bot, typo)
+    app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    app.add_error_handler(error_handler)
+    return app
+
+
 def main() -> None:
     req_path = os.path.join(BASE_DIR, "requirements.txt")
     if not os.path.exists(req_path):
@@ -3302,32 +3336,9 @@ def main() -> None:
         if binfo.get("status") == "RUNNING":
             start_bot_process(bid)
 
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
+    app = build_application(lifecycle=True)
 
-    # =================================================================
-    #  ##  HANDLER REGISTRATION  ##   (kaun si command kis function pe)
-    #     /start   -> start_command      <- YAHAN register hota hai
-    #     /help    -> help_command
-    #     /back    -> menu_command  (menu slash-command hata di gayi hai)
-    #     /redeem  -> redeem_command
-    #     /admin /addadmin /addpremium
-    # =================================================================
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler(["back", "Back", "home", "cancel", "Cancel"], menu_command))
-    app.add_handler(CommandHandler(["redeem", "Redeem", "REDEEM"], redeem_command))
-    app.add_handler(CommandHandler(["admin", "Admin", "ADMIN"], admin_command))
-    app.add_handler(CommandHandler("addadmin", add_admin_command))
-    app.add_handler(CommandHandler("addpremium", add_premium_command))
-    app.add_handler(CommandHandler(["help", "h", "commands", "support", "info", "about"], help_command))
 
-    app.add_handler(CallbackQueryHandler(callback_query_handler))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.VIDEO | filters.ANIMATION | filters.VIDEO_NOTE, handle_video))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    # sabse aakhir: koi bhi bachi hui command (/START, /start@bot, typo) -> sahi handler / main menu
-    app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
-    app.add_error_handler(error_handler)
 
     logger.info("EXCLUSIVE ROLAX HOSTING V2 v%s online - polling started", VERSION)
     try:
