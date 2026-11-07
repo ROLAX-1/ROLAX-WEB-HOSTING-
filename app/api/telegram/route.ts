@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
       const r = await fetch(`${API}/bot${t}/setMyCommands`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ commands: [{ command: "start", description: "Start the bot" }, { command: "help", description: "Get help" }] }),
+        body: JSON.stringify({ commands: [{ command: "start", description: "Main menu" }] }),
         cache: "no-store",
       });
       const j = await r.json();

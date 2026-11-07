@@ -981,13 +981,19 @@ def read_dotenv(bot_dir: str) -> dict:
 # ==================== KEYBOARDS ====================
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Main screen styled like the owner's reference image.
+
+    Telegram controls the actual button colors from the user's theme, so the
+    bot controls the same compact labels, rows, icons and spacing instead of
+    trying to fake colors that Telegram does not allow bots to set.
+    """
     keyboard = [
-        [InlineKeyboardButton("🚀 Host New Bot", callback_data="menu_host")],
-        [InlineKeyboardButton("🤖 My Bots", callback_data="menu_mybots"), InlineKeyboardButton("📁 File Manager", callback_data="menu_files")],
-        [InlineKeyboardButton("📊 Dashboard", callback_data="menu_dashboard"), InlineKeyboardButton("🎁 Refer & Earn", callback_data="menu_referral")],
-        [InlineKeyboardButton("🎟️ Redeem Code", callback_data="menu_redeem_prompt"), InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings")],
-        [InlineKeyboardButton("💾 Backup Data", callback_data="menu_backup"), InlineKeyboardButton("👤 My Account", callback_data="menu_account")],
-        [InlineKeyboardButton("📢 Official Channel ↗", url=OFFICIAL_CHANNEL_URL), InlineKeyboardButton("👨‍💻 Contact Owner ↗", url="https://t.me/Rolax112")]
+        [InlineKeyboardButton("🚀 Host Bot", callback_data="menu_host")],
+        [InlineKeyboardButton("🤖 My Bots", callback_data="menu_mybots"), InlineKeyboardButton("📁 Files", callback_data="menu_files")],
+        [InlineKeyboardButton("📊 Dashboard", callback_data="menu_dashboard"), InlineKeyboardButton("💎 Premium Plans", callback_data="menu_premium")],
+        [InlineKeyboardButton("💾 Backup", callback_data="menu_backup"), InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings")],
+        [InlineKeyboardButton("👤 Account", callback_data="menu_account")],
+        [InlineKeyboardButton("📣 Channel ↗", url=OFFICIAL_CHANNEL_URL), InlineKeyboardButton("▶️ OWNER ↗", url="https://t.me/Rolax112")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -1487,6 +1493,33 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         log_session_action(user.id, user.username or "N/A", "Navigated to Main Menu")
         await safe_edit(query, get_start_text(user.first_name, user_bot_count, max_bots, is_prem, credits, expiry_str), parse_mode="Markdown", reply_markup=main_menu_keyboard())
+
+    elif data == "menu_premium":
+        is_prem = bool(u_data.get("premium", False))
+        expiry = u_data.get("premium_expiry")
+        expiry_text = ""
+        if is_prem and expiry:
+            remaining = max(0, int(float(expiry) - time.time()))
+            expiry_text = f"\n⏳ Remaining: {remaining // 86400} days"
+        text = (
+            "💎 **Premium Plans**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🆓 **Free Member**\n"
+            "• Limited bot slots\n"
+            "• Basic hosting controls\n\n"
+            "🚀 **Premium VIP**\n"
+            "• Unlimited bot slots\n"
+            "• Priority hosting controls\n"
+            "• Full premium access\n\n"
+            f"Your status: {'✅ Premium VIP' if is_prem else '🆓 Free Member'}"
+            f"{expiry_text}\n\n"
+            "Premium activate karne ke liye OWNER se contact karein."
+        )
+        keyboard = [
+            [InlineKeyboardButton("▶️ Contact OWNER", url="https://t.me/Rolax112")],
+            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_start")]
+        ]
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "menu_referral":
         bot_username = context.bot.username
@@ -3386,10 +3419,11 @@ async def post_init(app: Application) -> None:
 
     # Telegram ke "/" menu me commands dikhao (pehle koi list hi nahi thi)
     try:
+        # Telegram side command menu intentionally exposes only /start.
+        # Other handlers remain available internally for admin/backward
+        # compatibility, but the user-facing command list stays clean.
         await app.bot.set_my_commands([
             ("start", "Main menu / bot host karo"),
-            ("help", "Saare commands dekho"),
-            ("redeem", "Redeem code se credits add karo"),
         ])
     except Exception as e:
         logger.warning("set_my_commands failed: %s", e)
