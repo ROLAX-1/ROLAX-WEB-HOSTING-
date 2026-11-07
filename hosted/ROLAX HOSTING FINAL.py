@@ -483,8 +483,11 @@ async def check_force_join(user_id: int, bot) -> bool:
     for raw_channel in channels:
         raw = str(raw_channel).strip()
         try:
+            # Resolve first so migrated groups/usernames use Telegram's
+            # canonical chat ID for the membership query.
+            chat = await _force_join_chat(bot, raw)
             member = await bot.get_chat_member(
-                chat_id=_to_chat_id(raw), user_id=int(user_id)
+                chat_id=getattr(chat, "id", _to_chat_id(raw)), user_id=int(user_id)
             )
             status = str(getattr(member, "status", "unknown")).lower()
             is_member = getattr(member, "is_member", True)
@@ -2177,8 +2180,13 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         channels = get_force_join()
         ch_list = "\n".join([f"• {ch}" for ch in channels]) or "No channels configured."
+        health = await audit_force_join_config(context.bot)
+        if health:
+            health_text = "\n\n⚠️ Verification problems:\n" + "\n".join(f"• {item}" for item in health)
+        else:
+            health_text = "\n\n✅ Bot admin access verified for all configured chats."
         await safe_edit(query,
-            f"📢 Force Join Configuration\n\nActive Channels:\n{ch_list}\n\nChoose an action:",
+            f"📢 Force Join Configuration\n\nActive Channels:\n{ch_list}{health_text}\n\nChoose an action:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("➕ Add Channel", callback_data="adm_fj_add"), InlineKeyboardButton("➖ Remove Channel", callback_data="adm_fj_rem")],
                 [InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")]
@@ -3491,9 +3499,8 @@ async def startup_self_check(app: Application) -> None:
                 await app.bot.send_message(
                     chat_id=ADMIN_ID,
                     text=("⚠️ Force-Join self-check found problems\n\n" + detail +
-                          "\n\nUsers are NOT blocked by these channels (the bot skips them), "
-                          "but join enforcement is off for them. Make the bot an administrator "
-                          "in each channel to enforce it.")
+                          "\n\nForce Join will remain active for these chats until the configuration is fixed. "
+                          "Make the bot an administrator in each chat and confirm the saved ID.")
                 )
             except Exception:
                 pass
