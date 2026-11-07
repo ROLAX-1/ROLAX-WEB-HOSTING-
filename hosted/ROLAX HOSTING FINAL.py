@@ -80,7 +80,9 @@ OWNER_USERNAME = "@Rolax112"
 OFFICIAL_CHANNEL_URL = "https://t.me/rolaxexploitszz"
 
 # Force join channels (@username ya -100... id). Khali list = force join off.
-FORCE_JOIN_CHANNELS = ["-1003968777224", "-1003971286585"]
+# The second legacy chat was removed from Force Join at the owner's request.
+FORCE_JOIN_CHANNELS = ["-1003968777224"]
+REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 
 # Data folder. Khali = isi file ke folder me (users.json, bots.json, hosted_bots).
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
@@ -274,19 +276,25 @@ def get_force_join() -> list:
     channels = load_json(FORCE_JOIN_FILE, [])
     if not isinstance(channels, list):
         channels = []
+    original = [str(channel).strip() for channel in channels]
     normalized = []
-    for channel in channels:
-        value = str(channel).strip()
-        if value and value not in normalized:
+    for value in original:
+        if not value or value in REMOVED_FORCE_JOIN_CHANNELS:
+            continue
+        if value not in normalized:
             normalized.append(value)
 
-    # One-time migration: add the two requested channels without resetting the
-    # existing list. After migration, admin add/remove choices remain persistent.
-    if not os.path.exists(FORCE_JOIN_MIGRATION_FILE):
-        for channel in REQUIRED_FORCE_JOIN_CHANNELS:
-            if channel not in normalized:
-                normalized.append(channel)
+    # Keep the configured required chat and remove the legacy chat even when
+    # an older force_join.json or migration marker already exists on disk.
+    for channel in REQUIRED_FORCE_JOIN_CHANNELS:
+        value = str(channel).strip()
+        if value and value not in REMOVED_FORCE_JOIN_CHANNELS and value not in normalized:
+            normalized.append(value)
+
+    migration_missing = not os.path.exists(FORCE_JOIN_MIGRATION_FILE)
+    if migration_missing or normalized != original:
         save_json(FORCE_JOIN_FILE, normalized)
+    if migration_missing:
         try:
             with open(FORCE_JOIN_MIGRATION_FILE, "w", encoding="utf-8") as marker:
                 marker.write("done")
