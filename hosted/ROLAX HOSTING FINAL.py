@@ -1054,17 +1054,14 @@ def admin_panel_keyboard(user_id: int) -> InlineKeyboardMarkup:
 # ==================== HELPERS ====================
 
 def get_start_text(user_first_name: str, user_bot_count: int, max_bots: int, is_premium: bool, credits: float, expiry_str: str = "") -> str:
-    plan_name = f"Premium VIP (Infinity Host){expiry_str}" if is_premium else f"Free Member (Max Bots: {max_bots})"
+    # Keep the welcome message compact: show only the two requested account values.
     return (
         f"✨ **EXCLUSIVE ROLAX HOSTING V2** ✨\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👋 Hello **{user_first_name}**, Welcome!\n\n"
         f"⚡ Here you can host and manage your Python and Node.js bots 24/7 without interruption.\n\n"
-        f"📊 **Account Summary:**\n"
-        f"• **Status:** `{plan_name}`\n"
-        f"• **Credits:** `{round(credits, 2)} Credits` (1 Credit = 1 Bot Slot)\n"
-        f"• **Active Bots:** `{user_bot_count} / {max_bots}`\n"
-        f"• **Support:** `{OWNER_USERNAME}`\n\n"
+        f"💰 **Account Credits:** `{round(credits, 2)} Credits`\n"
+        f"🤖 **Total Bot Host:** `{user_bot_count}`\n\n"
         f"👇 Select an option using the interactive buttons below:\n\n"
         f"v{VERSION}" + ((" · @" + BOT_USERNAME) if BOT_USERNAME else "")
     )
