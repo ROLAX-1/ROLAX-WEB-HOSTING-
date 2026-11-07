@@ -412,8 +412,8 @@ def log_button_click(user_id: int, username: str, button_data: str) -> None:
         f.write(entry)
 
 FORCE_JOIN_CACHE: Dict[tuple, float] = {}
-FORCE_JOIN_CACHE_TTL = 60.0          # seconds a successful check is trusted
-_FJ_BROKEN_CHANNELS: set = set()     # channels Telegram will not let us verify
+FORCE_JOIN_CACHE_TTL = 30.0          # successful checks are trusted briefly
+_FJ_ERROR_LOGGED: set = set()        # avoid repeating the same setup warning
 
 
 def _to_chat_id(raw_value: Any):
@@ -421,14 +421,52 @@ def _to_chat_id(raw_value: Any):
     return int(raw) if raw.lstrip("-").isdigit() else raw
 
 
-async def check_force_join(user_id: int, bot) -> bool:
-    """Return True when the user may use the bot.
+async def _force_join_chat(bot, raw_channel: str):
+    """Resolve a configured @username or numeric chat ID through Telegram."""
+    return await bot.get_chat(_to_chat_id(raw_channel))
 
-    FIX: the old version failed *closed*, so a single channel where the bot is
-    not an administrator (Telegram answers CHAT_ADMIN_REQUIRED) or a wrong/old
-    channel id ("chat not found") blocked EVERY normal user forever. Now only a
-    genuine "user is not a member" answer blocks; channels we cannot verify are
-    skipped with a warning so the bot keeps working.
+
+async def force_join_keyboard(bot, verify_callback: str = "menu_start") -> InlineKeyboardMarkup:
+    """Build usable join links for public and private required chats.
+
+    Numeric IDs are common for private groups/channels. Their invite link can
+    only be obtained from Telegram after the bot is an administrator, so use
+    ``Chat.invite_link`` when available and never invent a broken t.me URL.
+    """
+    buttons = []
+    for raw_channel in get_force_join():
+        raw = str(raw_channel).strip()
+        try:
+            chat = await _force_join_chat(bot, raw)
+            title = getattr(chat, "title", None) or getattr(chat, "username", None) or raw
+            username = str(getattr(chat, "username", "") or "").strip().lstrip("@")
+            invite_link = str(getattr(chat, "invite_link", "") or "").strip()
+            url = invite_link or (f"https://t.me/{username}" if username else "")
+            if url:
+                buttons.append([InlineKeyboardButton(f"📢 Join {title}", url=url)])
+            else:
+                logger.warning("Force-join chat %s has no public username or invite link", raw)
+        except Exception as exc:
+            # A raw @username is still linkable even if a transient getChat
+            # request fails. Numeric private IDs need the admin's invite link.
+            if raw.startswith("@"):
+                buttons.append([InlineKeyboardButton(
+                    f"📢 Join {raw}", url=f"https://t.me/{raw[1:]}")])
+            else:
+                logger.warning("Unable to resolve join URL for force-join chat %s: %s", raw, exc)
+    if not buttons:
+        buttons.append([InlineKeyboardButton("📢 Join Official Channel", url=OFFICIAL_CHANNEL_URL)])
+    buttons.append([InlineKeyboardButton("🔄 Verify Membership", callback_data=verify_callback)])
+    return InlineKeyboardMarkup(buttons)
+
+
+async def check_force_join(user_id: int, bot) -> bool:
+    """Return True only after the user has joined every required chat.
+
+    Telegram can return a configuration error when the bot is not an admin or
+    when a saved chat ID is wrong. Those errors must not silently disable force
+    join: the check now fails closed, logs the exact chat problem, and starts
+    working automatically as soon as the admin fixes the chat permissions.
     """
     if is_admin(user_id):
         return True
@@ -441,11 +479,13 @@ async def check_force_join(user_id: int, bot) -> bool:
     if FORCE_JOIN_CACHE.get(cache_key, 0) > now:
         return True
 
-    for ch in channels:
-        if ch in _FJ_BROKEN_CHANNELS:
-            continue
+    setup_error = False
+    for raw_channel in channels:
+        raw = str(raw_channel).strip()
         try:
-            member = await bot.get_chat_member(chat_id=_to_chat_id(ch), user_id=user_id)
+            member = await bot.get_chat_member(
+                chat_id=_to_chat_id(raw), user_id=int(user_id)
+            )
             status = str(getattr(member, "status", "unknown")).lower()
             is_member = getattr(member, "is_member", True)
             if status in ("left", "kicked", "banned"):
@@ -454,26 +494,22 @@ async def check_force_join(user_id: int, bot) -> bool:
                 return False
             if status not in ("creator", "administrator", "member", "restricted"):
                 return False
-        except Exception as e:
-            err = str(e)
-            err_l = err.lower()
-            # Configuration problem (bot not admin / channel id wrong) -> skip
-            # this channel instead of locking the whole userbase out.
-            # NOTE: PTB lower-cases Telegram descriptions ("Chat_admin_required"),
-            # so the match must be case-insensitive.
-            if any(k in err_l for k in ("chat_admin_required", "chat not found",
-                                        "forbidden", "not enough rights",
-                                        "peer_id_invalid", "user not found",
-                                        "chat_write_forbidden", "bot is not a member")):
-                if ch not in _FJ_BROKEN_CHANNELS:
-                    _FJ_BROKEN_CHANNELS.add(ch)
-                    logger.warning(
-                        "Force-join channel %s cannot be verified (%s). Skipping it - "
-                        "make the bot an administrator there to enforce it.", ch, err)
-                continue
-            # Flood control / network hiccup: do not punish the user for it.
-            logger.warning("Force-join check skipped for %s: %s", ch, err)
-            continue
+        except Exception as exc:
+            setup_error = True
+            err = str(exc)
+            key = (raw, err.lower())
+            if key not in _FJ_ERROR_LOGGED:
+                _FJ_ERROR_LOGGED.add(key)
+                logger.error(
+                    "Force-join verification failed for %s: %s. "
+                    "Confirm the bot is an administrator and the chat ID is correct.",
+                    raw, err,
+                )
+
+    if setup_error:
+        # Do not let an unavailable required chat silently grant access. The
+        # owner/admin bypass above still leaves the admin able to repair it.
+        return False
 
     FORCE_JOIN_CACHE[cache_key] = now + FORCE_JOIN_CACHE_TTL
     return True
@@ -1195,22 +1231,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if not await check_force_join(user.id, context.bot):
-        buttons = []
-        for ch in get_force_join():
-            try:
-                raw = str(ch).strip()
-                chat_id = int(raw) if raw.lstrip("-").isdigit() else raw
-                chat = await context.bot.get_chat(chat_id)
-                if getattr(chat, "username", None):
-                    buttons.append([InlineKeyboardButton(f"📢 Join {getattr(chat, 'title', None) or chat.username}", url=f"https://t.me/{chat.username}")])
-            except Exception:
-                logger.warning("Unable to resolve join URL for force-join channel %s", ch)
-        if not buttons:
-            buttons.append([InlineKeyboardButton("📢 Join Official Channel", url=OFFICIAL_CHANNEL_URL)])
-        buttons.append([InlineKeyboardButton("🔄 Verify Membership", callback_data="menu_start")])
         await safe_reply(update.message,
-            "Force Join Required\n\nPlease join BOTH required channels to use bot hosting features. If a channel is private, ask the admin for its invite link. Then tap Verify Membership.",
-            reply_markup=InlineKeyboardMarkup(buttons)
+            "Force Join Required\n\nPlease join all required groups/channels to use bot hosting features. Then tap Verify Membership.",
+            reply_markup=await force_join_keyboard(context.bot)
         )
         return
 
@@ -1456,22 +1479,9 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu_start":
         if not await check_force_join(user.id, context.bot):
-            buttons = []
-            for ch in get_force_join():
-                try:
-                    raw = str(ch).strip()
-                    chat_id = int(raw) if raw.lstrip("-").isdigit() else raw
-                    chat = await context.bot.get_chat(chat_id)
-                    if getattr(chat, "username", None):
-                        buttons.append([InlineKeyboardButton(f"📢 Join {getattr(chat, 'title', None) or chat.username}", url=f"https://t.me/{chat.username}")])
-                except Exception:
-                    logger.warning("Unable to resolve join URL for force-join channel %s", ch)
-            if not buttons:
-                buttons.append([InlineKeyboardButton("📢 Join Official Channel", url=OFFICIAL_CHANNEL_URL)])
-            buttons.append([InlineKeyboardButton("🔄 Verify Membership", callback_data="menu_start")])
             await safe_edit(query,
-                "Force Join Required\n\nPlease join BOTH required channels to proceed. If a channel is private, ask the admin for its invite link. Then tap Verify Membership.",
-                reply_markup=InlineKeyboardMarkup(buttons)
+                "Force Join Required\n\nPlease join all required groups/channels to proceed. Then tap Verify Membership.",
+                reply_markup=await force_join_keyboard(context.bot)
             )
             return
         bots = get_bots()
