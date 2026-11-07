@@ -185,10 +185,8 @@ async function ensureDefaultWebhook(req: NextRequest) {
     if (!set?.ok) return { ok: false, url, error: set?.description || "setWebhook failed" };
   }
   // Webhook requests do not run PTB's post_init hook, so keep Telegram's
-  // command menu in sync here as well. This is harmless when the commands are
-  // already set and makes /start, /help and /redeem discoverable again.
-  // Keep Telegram's side command menu minimal: only /start is exposed.
-  // Other handlers remain available internally when explicitly typed.
+  // command menu in sync here as well. Keep the side menu minimal: only
+  // /start is exposed; other handlers remain available internally.
   await tg(reg.token, "setMyCommands", {
     commands: [
       { command: "start", description: "Main menu / bot host karo" },
