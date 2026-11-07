@@ -77,7 +77,7 @@ _load_env_file(*[os.path.join(_HERE, name) for name in _ENV_NAMES],
 BOT_TOKEN = ""  # Hosting me BOT_TOKEN environment variable se inject hoga
 ADMIN_ID = 8472327599
 OWNER_USERNAME = "@Rolax112"
-OFFICIAL_CHANNEL_URL = "https://t.me/rolaxexploitsz"
+OFFICIAL_CHANNEL_URL = "https://t.me/rolaxexploitszz"
 
 # Force join channels (@username ya -100... id). Khali list = force join off.
 FORCE_JOIN_CHANNELS = ["-1003968777224", "-1003971286585"]
