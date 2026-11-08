@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =====================================================================
-#  ROLAX HOSTING V2  -  v3.24   (SINGLE FILE BUILD)
+#  ROLAX HOSTING V2  -  v3.25   (SINGLE FILE BUILD)
 # ---------------------------------------------------------------------
 #  Chalane ka tarika:
 #       python3 ROLAX_HOSTING_FINAL.py
@@ -88,7 +88,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.24"
+VERSION = "3.25"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -108,6 +108,7 @@ if _fj_env:
 
 BOT_USERNAME = ""   # startup pe get_me() se bhar jaata hai
 _LAST_CONFLICT_ALERT = 0.0   # 409 Conflict alert spam rok
+_ERROR_ALERTS_SENT = {}      # same exception ko owner ko baar-baar DM na karo
 REQUIRED_FORCE_JOIN_CHANNELS = list(FORCE_JOIN_CHANNELS)
 FORCE_JOIN_CHANNEL = FORCE_JOIN_CHANNELS[0] if FORCE_JOIN_CHANNELS else ""
 
@@ -532,8 +533,16 @@ async def audit_force_join_config(bot) -> list:
     for ch in get_force_join():
         try:
             chat = await bot.get_chat(_to_chat_id(ch))
+            chat_id = getattr(chat, "id", None)
+            if chat_id is None:
+                problems.append(f"{ch}: Telegram returned no chat object")
+                continue
             me = await bot.get_me()
-            member = await bot.get_chat_member(chat_id=chat.id, user_id=me.id)
+            me_id = getattr(me, "id", None)
+            if me_id is None:
+                problems.append(f"{ch}: Telegram returned no bot identity")
+                continue
+            member = await bot.get_chat_member(chat_id=chat_id, user_id=me_id)
             if str(getattr(member, "status", "")).lower() not in ("administrator", "creator"):
                 problems.append(f"{ch} ({getattr(chat, 'title', ch)}): bot is not admin")
         except Exception as e:
@@ -985,6 +994,9 @@ async def render_main_menu(query, user, context) -> None:
 
 async def safe_reply(message, text: Optional[str] = None, reply_markup=None, parse_mode=None):
     """Reply safely when the original message is gone or the panel is large."""
+    if message is None:
+        logger.info("safe_reply skipped because the update has no message")
+        return None
     rendered = _telegram_text(text)
     rendered_parse_mode = parse_mode if rendered == str(text or "") else None
     try:
@@ -1217,6 +1229,21 @@ def grant_premium(target: str, days: int) -> tuple[Optional[str], str]:
     save_users(users)
     return target_uid, ""
 
+# ==================== UPDATE SAFETY ====================
+
+def _has_user_update(update: object) -> bool:
+    """Return True only for updates that come from a Telegram user.
+
+    Bots that are administrators in a channel also receive channel_post and
+    other service updates. Those updates have no ``effective_user``; routing
+    them into user/menu handlers used to cause ``None.id`` crashes.
+    """
+    try:
+        return getattr(update, "effective_user", None) is not None
+    except Exception:
+        return False
+
+
 # ==================== COMMAND HANDLERS ====================
 
 # =====================================================================
@@ -1226,6 +1253,9 @@ def grant_premium(target: str, days: int) -> tuple[Optional[str], str]:
 #                 -> main() ke andar "HANDLER REGISTRATION" section me
 # =====================================================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _has_user_update(update):
+        logger.info("Ignoring /start from a non-user Telegram update")
+        return
     user = update.effective_user
     clear_user_flow(context)
     args = context.args
@@ -1283,6 +1313,9 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     NOTE: menu wali slash-command hata di gayi hai (user request) -
     uski jagah /back aur /start hain, aur back button har screen pe chalta hai."""
+    if not _has_user_update(update):
+        logger.info("Ignoring menu command from a non-user Telegram update")
+        return
     clear_user_flow(context)
     if update.callback_query:
         await render_main_menu(update.callback_query, update.effective_user, context)
@@ -1291,6 +1324,9 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _has_user_update(update):
+        logger.info("Ignoring redeem command from a non-user Telegram update")
+        return
     user = update.effective_user
     args = context.args
     if not args:
@@ -1357,6 +1393,9 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await safe_reply(update.message, f"Redeem Successful!\n\nAdded +{reward_credits} Credits to your account wallet. Enjoy hosting!")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _has_user_update(update):
+        logger.info("Ignoring admin command from a non-user Telegram update")
+        return
     user = update.effective_user
     if not is_admin(user.id):
         await safe_reply(update.message, "You are not authorized to use the admin panel.")
@@ -1391,6 +1430,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_edit(update.callback_query, text, reply_markup=admin_panel_keyboard(user.id))
 
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _has_user_update(update):
+        logger.info("Ignoring add-admin command from a non-user Telegram update")
+        return
     user = update.effective_user
     if int(user.id) != int(ADMIN_ID):
         await safe_reply(update.message, "Only Super Owner can add new admins.")
@@ -1419,6 +1461,9 @@ async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await safe_reply(update.message, "Invalid Chat ID. Provide numbers only.")
 
 async def add_premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _has_user_update(update):
+        logger.info("Ignoring add-premium command from a non-user Telegram update")
+        return
     user = update.effective_user
     if not is_admin(user.id):
         return
@@ -1453,7 +1498,10 @@ async def add_premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Actual routing. Returns True when the callback should be re-routed
     (e.g. after restart/stop the control screen must be redrawn)."""
-    query = update.callback_query
+    query = getattr(update, "callback_query", None)
+    if query is None or getattr(query, "from_user", None) is None:
+        logger.info("Ignoring callback update without a Telegram user")
+        return False
     user = query.from_user
     data = query.data
 
@@ -2508,6 +2556,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     RecursionError, and a RecursionError inside an async handler is silent. Here
     the redirect is a small loop with a hard limit instead of recursion.
     """
+    if not _has_user_update(update) or getattr(update, "callback_query", None) is None:
+        logger.info("Ignoring callback update without a Telegram user")
+        return
     for _ in range(5):
         if not await _route_callback(update, context):
             return
@@ -2579,6 +2630,9 @@ def _resolve_command_name(text: str) -> Optional[str]:
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """`/help` — hamesha kaam karta hai, poori list + main menu."""
+    if not _has_user_update(update):
+        logger.info("Ignoring help command from a non-user Telegram update")
+        return
     clear_user_flow(context)
     text = HELP_TEXT + (("\n\n🤖 **Bot:** @" + BOT_USERNAME) if BOT_USERNAME else "")
     await safe_reply(
@@ -2597,6 +2651,9 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     route hoti hai, aur agar bilkul samajh na aaye to seedha main menu khul
     jaata hai. Isliye "/help" ya "/start" kabhi bhi fail nahi ho sakta.
     """
+    if not _has_user_update(update):
+        logger.info("Ignoring unknown command from a non-user Telegram update")
+        return
     clear_user_flow(context)
     raw = (update.message.text or "") if update.message else ""
     target = _resolve_command_name(raw)
@@ -2625,6 +2682,9 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _has_user_update(update):
+        logger.info("Ignoring document update without a Telegram user")
+        return
     user = update.effective_user
     users = get_users()
     u_data = users.get(str(user.id), {})
@@ -2741,6 +2801,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await safe_reply(update.message, f"Saved file as ID #{new_id}, but process launch failed (Account might be restricted).")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _has_user_update(update):
+        logger.info("Ignoring photo update without a Telegram user")
+        return
     user = update.effective_user
     if is_admin(user.id) and context.user_data.pop("awaiting_media_broadcast", False):
         if int(user.id) != int(ADMIN_ID):
@@ -2760,6 +2823,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """FIX: the Media Broadcast prompt offered video, but no video handler existed."""
+    if not _has_user_update(update):
+        logger.info("Ignoring video update without a Telegram user")
+        return
     user = update.effective_user
     if is_admin(user.id) and context.user_data.pop("awaiting_media_broadcast", False):
         if int(user.id) != int(ADMIN_ID):
@@ -2788,6 +2854,9 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _has_user_update(update):
+        logger.info("Ignoring text update without a Telegram user")
+        return
     user = update.effective_user
     text = (update.message.text or "").strip()
     if not text:
@@ -3419,10 +3488,21 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         pass
 
     if not isinstance(err, (SystemExit, KeyboardInterrupt)):
+        # One broken Telegram update should not fill the owner chat with the
+        # same report dozens of times. Keep the first report and suppress the
+        # identical error for ten minutes while the bot continues logging it.
+        error_key = (type(err).__name__, str(err))
+        now = time.time()
+        last_sent = _ERROR_ALERTS_SENT.get(error_key, 0.0)
+        if now - last_sent < 600:
+            return
+        _ERROR_ALERTS_SENT[error_key] = now
         try:
+            update_kind = type(update).__name__ if update is not None else "None"
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"🐞 Bot error report\n\nType: {type(err).__name__}\nDetail: {str(err)[:600]}"
+                text=(f"🐞 Bot error report\n\nType: {type(err).__name__}\n"
+                      f"Detail: {str(err)[:600]}\nUpdate: {update_kind}")
             )
         except Exception:
             pass
