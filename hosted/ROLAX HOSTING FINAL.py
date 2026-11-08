@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =====================================================================
-#  ROLAX HOSTING V2  -  v3.25   (SINGLE FILE BUILD)
+#  ROLAX HOSTING V2  -  v3.26   (SINGLE FILE BUILD)
 # ---------------------------------------------------------------------
 #  Chalane ka tarika:
 #       python3 ROLAX_HOSTING_FINAL.py
@@ -88,7 +88,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.25"
+VERSION = "3.26"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -186,6 +186,7 @@ USERS_FILE = os.path.join(BASE_DIR, "users.json")
 BOTS_FILE = os.path.join(BASE_DIR, "bots.json")
 PENDING_FILE = os.path.join(BASE_DIR, "pending.json")
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+PLANS_FILE = os.path.join(BASE_DIR, "plans.json")
 ADMINS_FILE = os.path.join(BASE_DIR, "admins.json")
 FORCE_JOIN_FILE = os.path.join(BASE_DIR, "force_join.json")
 FORCE_JOIN_MIGRATION_FILE = os.path.join(BASE_DIR, ".force_join_channels_migrated")
@@ -323,6 +324,187 @@ def get_config() -> dict:
     return load_json(CONFIG_FILE, default_cfg)
 
 def save_config(data: dict) -> None: save_json(CONFIG_FILE, data)
+
+# ==================== MEMBERSHIP PLANS ====================
+# Prices are intentionally admin-configurable. Payment is still handled by
+# direct DM to the owner; this catalog only controls what users see and what
+# limits/features are granted after the owner activates a plan.
+DEFAULT_PLAN_CATALOG = {
+    "basic": {
+        "id": "basic", "name": "Basic Plan", "price_inr": None,
+        "duration_days": 30, "max_bots": 1, "ai_autofix": False, "active": True,
+    },
+    "classic": {
+        "id": "classic", "name": "Classic Plan", "price_inr": None,
+        "duration_days": 30, "max_bots": 5, "ai_autofix": False, "active": True,
+    },
+    "premium": {
+        "id": "premium", "name": "Premium Plan", "price_inr": None,
+        "duration_days": 30, "max_bots": 999999, "ai_autofix": True, "active": True,
+    },
+}
+
+
+def save_plans(data: dict) -> None:
+    save_json(PLANS_FILE, data)
+
+
+def get_plans() -> dict:
+    """Return the editable Basic/Classic/Premium catalog.
+
+    Existing custom plans are preserved. Missing built-in plans are restored so
+    an old database can be upgraded without deleting the admin's changes.
+    """
+    raw = load_json(PLANS_FILE, {})
+    plans = raw if isinstance(raw, dict) else {}
+    changed = False
+    for slug, default in DEFAULT_PLAN_CATALOG.items():
+        if not isinstance(plans.get(slug), dict):
+            plans[slug] = dict(default)
+            changed = True
+            continue
+        item = plans[slug]
+        for key, value in default.items():
+            if key not in item:
+                item[key] = value
+                changed = True
+        item["id"] = slug
+        try:
+            item["duration_days"] = max(1, min(3650, int(item.get("duration_days", 30))))
+        except (TypeError, ValueError):
+            item["duration_days"] = default["duration_days"]
+            changed = True
+        try:
+            item["max_bots"] = 999999 if str(item.get("max_bots", 1)).lower() in ("unlimited", "infinity", "infinite") else max(1, int(item.get("max_bots", 1)))
+        except (TypeError, ValueError):
+            item["max_bots"] = default["max_bots"]
+            changed = True
+        item["active"] = bool(item.get("active", True))
+        item["ai_autofix"] = bool(item.get("ai_autofix", False))
+    if changed or not os.path.exists(PLANS_FILE):
+        save_plans(plans)
+    return plans
+
+
+def plan_price_label(plan: dict) -> str:
+    value = plan.get("price_inr")
+    if value is None or str(value).strip().lower() in ("", "contact", "admin", "dm"):
+        return "DM admin"
+    try:
+        number = float(value)
+        return f"₹{int(number) if number.is_integer() else number:g}"
+    except (TypeError, ValueError):
+        return f"₹{str(value).strip()}"
+
+
+def plan_duration_label(plan: dict) -> str:
+    try:
+        days = int(plan.get("duration_days", 30))
+    except (TypeError, ValueError):
+        days = 30
+    return f"{days} day" if days == 1 else f"{days} days"
+
+
+def get_user_plan(user_id: int, users: Optional[dict] = None) -> dict:
+    """Resolve the currently active plan, including legacy premium records."""
+    users = users if isinstance(users, dict) else get_users()
+    info = users.get(str(user_id), {}) if isinstance(users, dict) else {}
+    plans = get_plans()
+    plan_id = str(info.get("plan_id") or "basic").strip().lower()
+    expiry = info.get("plan_expiry") or info.get("premium_expiry")
+    legacy_premium = bool(info.get("premium", False))
+    if legacy_premium:
+        plan_id = "premium"
+    if expiry:
+        try:
+            if time.time() >= float(expiry):
+                plan_id = "basic"
+        except (TypeError, ValueError):
+            pass
+    plan = plans.get(plan_id)
+    if not isinstance(plan, dict) or not plan.get("active", True):
+        plan = plans.get("basic") or dict(DEFAULT_PLAN_CATALOG["basic"])
+    return plan
+
+
+def is_user_premium(user_id: int, users: Optional[dict] = None) -> bool:
+    return str(get_user_plan(user_id, users).get("id", "basic")) == "premium"
+
+
+def plan_has_unlimited_credits(plan: dict) -> bool:
+    try:
+        return int(plan.get("max_bots", 1)) >= 999999
+    except (TypeError, ValueError):
+        return str(plan.get("max_bots", "")).lower() in ("unlimited", "infinity", "infinite")
+
+
+def parse_plan_input(text: str, slug: Optional[str] = None) -> tuple[Optional[str], Optional[dict], str]:
+    """Parse admin format: slug | name | price/contact | days | max_bots/unlimited | ai 0/1."""
+    parts = [p.strip() for p in str(text or "").split("|")]
+    if slug is None:
+        if len(parts) != 6:
+            return None, None, "Format: ID | NAME | PRICE_INR/contact | DAYS | MAX_BOTS/unlimited | AI 0/1"
+        slug = re.sub(r"[^a-z0-9_-]+", "-", parts[0].lower()).strip("-_")
+        name, price_raw, days_raw, max_raw, ai_raw = parts[1:]
+    else:
+        if len(parts) != 5:
+            return None, None, "Format: NAME | PRICE_INR/contact | DAYS | MAX_BOTS/unlimited | AI 0/1"
+        name, price_raw, days_raw, max_raw, ai_raw = parts
+        slug = re.sub(r"[^a-z0-9_-]+", "-", str(slug).lower()).strip("-_")
+    if not slug or not name:
+        return None, None, "Plan ID aur name required hain."
+    try:
+        days = int(days_raw)
+        if days < 1 or days > 3650:
+            raise ValueError
+    except (TypeError, ValueError):
+        return None, None, "Days 1 se 3650 ke beech hone chahiye."
+    try:
+        max_bots = 999999 if max_raw.lower() in ("unlimited", "infinity", "infinite") else int(max_raw)
+        if max_bots < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        return None, None, "Max bots positive number ya unlimited hona chahiye."
+    if price_raw.lower() in ("", "contact", "admin", "dm", "free"):
+        price = None
+    else:
+        try:
+            price = float(price_raw.replace(",", ""))
+            if price < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return None, None, "Price numeric ya contact hona chahiye."
+    ai = ai_raw.lower() in ("1", "yes", "true", "on", "ai")
+    return slug, {
+        "id": slug, "name": name[:60], "price_inr": price,
+        "duration_days": days, "max_bots": max_bots,
+        "ai_autofix": ai, "active": True,
+    }, ""
+
+
+def plan_admin_text() -> str:
+    lines = ["💳 **Membership Plan Manager**", "", "Price/payment yahin set hoga; payment direct @Rolax112 DM se hi rahega.", ""]
+    for slug, plan in get_plans().items():
+        ai = "AI ON" if plan.get("ai_autofix") else "AI OFF"
+        state = "ON" if plan.get("active", True) else "OFF"
+        max_bots = "Unlimited" if plan_has_unlimited_credits(plan) else str(plan.get("max_bots", 1))
+        lines.append(f"• `{slug}` — {plan.get('name', slug)} [{state}]\n  {plan_price_label(plan)} / {plan_duration_label(plan)} • {max_bots} bot(s) • {ai}")
+    lines.append("\nAdd format: `id | name | price/contact | days | max_bots/unlimited | ai 0/1`")
+    lines.append("Edit format: `name | price/contact | days | max_bots/unlimited | ai 0/1`")
+    return "\n".join(lines)
+
+
+def plan_admin_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    for slug, plan in get_plans().items():
+        rows.append([
+            InlineKeyboardButton(f"✏️ {plan.get('name', slug)}", callback_data=f"adm_plan_edit_{slug}"),
+            InlineKeyboardButton("ON" if plan.get("active", True) else "OFF", callback_data=f"adm_plan_toggle_{slug}"),
+        ])
+    rows.append([InlineKeyboardButton("➕ Add Plan", callback_data="adm_plan_add")])
+    rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")])
+    return InlineKeyboardMarkup(rows)
+
 
 def get_scheduled_announcements() -> list:
     """Read pending admin announcements from a small durable queue.
@@ -559,15 +741,22 @@ async def background_expiry_guardian(app: Application):
             updated = False
 
             for uid, uinfo in users.items():
-                if uinfo.get("premium", False) and uinfo.get("premium_expiry"):
-                    if now >= uinfo["premium_expiry"]:
+                expiry = uinfo.get("plan_expiry") or uinfo.get("premium_expiry")
+                if expiry:
+                    try:
+                        expired = now >= float(expiry)
+                    except (TypeError, ValueError):
+                        expired = False
+                    if expired:
                         uinfo["premium"] = False
+                        uinfo["plan_id"] = "basic"
+                        uinfo["plan_expiry"] = None
                         uinfo["premium_expiry"] = None
                         updated = True
                         try:
                             await app.bot.send_message(
                                 chat_id=int(uid),
-                                text="Your Premium VIP membership has expired! You are now on the Free tier.",
+                                text="Your plan has expired. You are now on the Basic Plan. Premium features are disabled.",
                                 parse_mode="Markdown"
                             )
                         except Exception:
@@ -973,12 +1162,14 @@ async def render_main_menu(query, user, context) -> None:
     bots = get_bots()
     user_bot_count = sum(1 for b in bots.values() if b.get("owner_id") == user.id)
     max_bots = get_user_max_bots(user.id)
-    is_prem = u_data.get("premium", False)
+    plan = get_user_plan(user.id, users)
+    is_prem = is_user_premium(user.id, users)
     credits = u_data.get("credits", 1.0)
 
     expiry_str = ""
-    if is_prem and u_data.get("premium_expiry"):
-        rem_secs = u_data["premium_expiry"] - time.time()
+    plan_expiry = u_data.get("plan_expiry") or u_data.get("premium_expiry")
+    if is_prem and plan_expiry:
+        rem_secs = float(plan_expiry) - time.time()
         if rem_secs > 0:
             days = int(rem_secs // 86400)
             hours = int((rem_secs % 86400) // 3600)
@@ -986,7 +1177,7 @@ async def render_main_menu(query, user, context) -> None:
 
     await safe_edit(
         query,
-        get_start_text(user.first_name, user_bot_count, max_bots, is_prem, credits, expiry_str),
+        get_start_text(user.first_name, user_bot_count, max_bots, is_prem, credits, expiry_str, plan.get("name", "Free Plan"), plan_has_unlimited_credits(plan)),
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
@@ -1079,6 +1270,7 @@ def admin_panel_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("👆 User Clicks", callback_data="adm_user_clicks"), InlineKeyboardButton("✉️ DM User", callback_data="adm_dm_user")],
             [InlineKeyboardButton(f"⏰ Daily Reminder: {rem_status}", callback_data="adm_toggle_reminder")],
             [InlineKeyboardButton("➕ Add Credit", callback_data="adm_add_credit"), InlineKeyboardButton("➖ Remove Credit", callback_data="adm_rem_credit")],
+            [InlineKeyboardButton("💳 Manage Plans", callback_data="adm_plans")],
             [InlineKeyboardButton("🎁 Set Referral", callback_data="adm_set_ref_reward"), InlineKeyboardButton("🎟️ Create Redeem", callback_data="adm_create_redeem")],
             [InlineKeyboardButton("📢 Instant Broadcast", callback_data="adm_broadcast"), InlineKeyboardButton("🖼️ Media Broadcast", callback_data="adm_broadcast_media")],
             [InlineKeyboardButton("⏰ Schedule Announce", callback_data="adm_schedule_announcement")],
@@ -1112,14 +1304,16 @@ def admin_panel_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 # ==================== HELPERS ====================
 
-def get_start_text(user_first_name: str, user_bot_count: int, max_bots: int, is_premium: bool, credits: float, expiry_str: str = "") -> str:
-    # Keep the welcome message compact: show only the two requested account values.
+def get_start_text(user_first_name: str, user_bot_count: int, max_bots: int, is_premium: bool, credits: float, expiry_str: str = "", plan_label: str = "Free Plan", unlimited_credits: bool = False) -> str:
+    # Keep the welcome section compact: the plan is included inside the
+    # Account Credits row, so the two account rows remain unchanged.
+    credit_label = f"{plan_label} • Unlimited Credits" if unlimited_credits else f"{plan_label} • {round(credits, 2)} Credits"
     return (
         f"✨ **EXCLUSIVE ROLAX HOSTING V2** ✨\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👋 Hello **{user_first_name}**, Welcome!\n\n"
         f"⚡ Here you can host and manage your Python and Node.js bots 24/7 without interruption.\n\n"
-        f"💰 **Account Credits:** `{round(credits, 2)} Credits`\n"
+        f"💰 **Account Credits:** `{credit_label}`\n"
         f"🤖 **Total Bot Host:** `{user_bot_count}`\n\n"
         f"👇 Select an option using the interactive buttons below:\n\n"
         f"v{VERSION}" + ((" · @" + BOT_USERNAME) if BOT_USERNAME else "")
@@ -1139,6 +1333,8 @@ def register_user(user, referrer_id: Optional[str] = None) -> dict:
             "banned": False,
             "restricted": False,
             "premium": False,
+            "plan_id": "basic",
+            "plan_expiry": None,
             "premium_expiry": None,
             "crash_alerts": True,
             "autofix": True,
@@ -1162,6 +1358,10 @@ def register_user(user, referrer_id: Optional[str] = None) -> dict:
             users[uid]["restricted"] = False
         if "premium_expiry" not in users[uid]:
             users[uid]["premium_expiry"] = None
+        if "plan_id" not in users[uid]:
+            users[uid]["plan_id"] = "premium" if users[uid].get("premium", False) else "basic"
+        if "plan_expiry" not in users[uid]:
+            users[uid]["plan_expiry"] = users[uid].get("premium_expiry")
         log_session_action(user.id, user.username or "N/A", "User Session Started / /start")
 
     save_users(users)
@@ -1170,10 +1370,19 @@ def register_user(user, referrer_id: Optional[str] = None) -> dict:
 def get_user_max_bots(user_id: int) -> int:
     users = get_users()
     u_data = users.get(str(user_id), {})
-    if u_data.get("premium", False):
+    plan = get_user_plan(user_id, users)
+    if plan_has_unlimited_credits(plan):
         return 999999
-    credits = u_data.get("credits", 1.0)
-    return max(1, int(credits))
+    try:
+        plan_limit = max(1, int(plan.get("max_bots", 1)))
+    except (TypeError, ValueError):
+        plan_limit = 1
+    try:
+        credits = max(1, int(float(u_data.get("credits", 1.0))))
+    except (TypeError, ValueError):
+        credits = 1
+    # Existing referral/redeem credits remain useful for Basic/Classic users.
+    return max(plan_limit, credits)
 
 
 def resolve_user_id(raw_value: str, users: Optional[dict] = None) -> Optional[str]:
@@ -1215,6 +1424,8 @@ def grant_premium(target: str, days: int) -> tuple[Optional[str], str]:
             "banned": False,
             "restricted": False,
             "premium": False,
+            "plan_id": "basic",
+            "plan_expiry": None,
             "premium_expiry": None,
             "crash_alerts": True,
             "autofix": True,
@@ -1223,8 +1434,13 @@ def grant_premium(target: str, days: int) -> tuple[Optional[str], str]:
         }
     if not target_uid:
         return None, "User ID ya saved @username nahi mila. Numeric Telegram Chat ID use karo."
+    plans = get_plans()
+    if "premium" not in plans:
+        return None, "Premium plan catalog me available nahi hai."
     expiry_timestamp = time.time() + (int(days) * 86400)
     users.setdefault(target_uid, {})["premium"] = True
+    users[target_uid]["plan_id"] = "premium"
+    users[target_uid]["plan_expiry"] = expiry_timestamp
     users[target_uid]["premium_expiry"] = expiry_timestamp
     save_users(users)
     return target_uid, ""
@@ -1290,19 +1506,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     bots = get_bots()
     user_bot_count = sum(1 for b in bots.values() if b.get("owner_id") == user.id)
     max_bots = get_user_max_bots(user.id)
-    is_prem = u_data.get("premium", False)
+    plan = get_user_plan(user.id)
+    is_prem = is_user_premium(user.id)
     credits = u_data.get("credits", 1.0)
 
     expiry_str = ""
-    if is_prem and u_data.get("premium_expiry"):
-        rem_secs = u_data["premium_expiry"] - time.time()
+    plan_expiry = u_data.get("plan_expiry") or u_data.get("premium_expiry")
+    if is_prem and plan_expiry:
+        rem_secs = float(plan_expiry) - time.time()
         if rem_secs > 0:
             days = int(rem_secs // 86400)
             hours = int((rem_secs % 86400) // 3600)
             expiry_str = f" (Expires in {days}d {hours}h)"
 
     await safe_reply(update.message,
-        get_start_text(user.first_name, user_bot_count, max_bots, is_prem, credits, expiry_str),
+        get_start_text(user.first_name, user_bot_count, max_bots, is_prem, credits, expiry_str, plan.get("name", "Free Plan"), plan_has_unlimited_credits(plan)),
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
@@ -1345,6 +1563,7 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "name": user.first_name or "N/A",
             "joined": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "banned": False, "restricted": False, "premium": False,
+            "plan_id": "basic", "plan_expiry": None,
             "premium_expiry": None, "crash_alerts": True, "autofix": True,
             "referred_by": None, "credits": 1.0
         }
@@ -1546,45 +1765,50 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bots = get_bots()
         user_bot_count = sum(1 for b in bots.values() if b.get("owner_id") == user.id)
         max_bots = get_user_max_bots(user.id)
-        is_prem = u_data.get("premium", False)
+        plan = get_user_plan(user.id, users)
+        is_prem = is_user_premium(user.id, users)
         credits = u_data.get("credits", 1.0)
 
         expiry_str = ""
-        if is_prem and u_data.get("premium_expiry"):
-            rem_secs = u_data["premium_expiry"] - time.time()
+        plan_expiry = u_data.get("plan_expiry") or u_data.get("premium_expiry")
+        if is_prem and plan_expiry:
+            rem_secs = float(plan_expiry) - time.time()
             if rem_secs > 0:
                 days = int(rem_secs // 86400)
                 hours = int((rem_secs % 86400) // 3600)
                 expiry_str = f" (Expires in {days}d {hours}h)"
 
         log_session_action(user.id, user.username or "N/A", "Navigated to Main Menu")
-        await safe_edit(query, get_start_text(user.first_name, user_bot_count, max_bots, is_prem, credits, expiry_str), parse_mode="Markdown", reply_markup=main_menu_keyboard())
+        await safe_edit(query, get_start_text(user.first_name, user_bot_count, max_bots, is_prem, credits, expiry_str, plan.get("name", "Free Plan"), plan_has_unlimited_credits(plan)), parse_mode="Markdown", reply_markup=main_menu_keyboard())
 
     elif data == "menu_premium":
-        is_prem = bool(u_data.get("premium", False))
-        expiry = u_data.get("premium_expiry")
+        plan = get_user_plan(user.id, users)
+        is_prem = is_user_premium(user.id, users)
+        expiry = u_data.get("plan_expiry") or u_data.get("premium_expiry")
         expiry_text = ""
         if is_prem and expiry:
             remaining = max(0, int(float(expiry) - time.time()))
             expiry_text = f"\n⏳ Remaining: {remaining // 86400} days"
+        plan_lines = []
+        keyboard = []
+        for slug, item in get_plans().items():
+            if not item.get("active", True):
+                continue
+            max_bots = "Unlimited bots" if plan_has_unlimited_credits(item) else f"{item.get('max_bots', 1)} bot slot(s)"
+            ai_text = " • Premium AI" if item.get("ai_autofix", False) else ""
+            plan_lines.append(f"• **{item.get('name', slug)}** — {plan_price_label(item)} / {plan_duration_label(item)}\n  {max_bots}{ai_text}")
+            keyboard.append([InlineKeyboardButton(f"📩 Buy {item.get('name', slug)}", url="https://t.me/Rolax112")])
+        current_name = plan.get("name", "Basic Plan")
         text = (
-            "💎 **Premium Plans**\n"
+            "💎 **Membership Plans**\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "🆓 **Free Member**\n"
-            "• Limited bot slots\n"
-            "• Basic hosting controls\n\n"
-            "🚀 **Premium VIP**\n"
-            "• Unlimited bot slots\n"
-            "• Priority hosting controls\n"
-            "• Full premium access\n\n"
-            f"Your status: {'✅ Premium VIP' if is_prem else '🆓 Free Member'}"
-            f"{expiry_text}\n\n"
-            "Premium activate karne ke liye OWNER se contact karein."
+            + ("\n\n".join(plan_lines) or "Plans abhi admin set karega.")
+            + "\n\n"
+            + f"Your current plan: {'✅ ' if is_prem else '🆓 '}{current_name}{expiry_text}\n\n"
+            + "Plan purchase/activation ke liye OWNER ko direct DM karein. Payment system unchanged hai."
         )
-        keyboard = [
-            [InlineKeyboardButton("▶️ Contact OWNER", url="https://t.me/Rolax112")],
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_start")]
-        ]
+        keyboard.append([InlineKeyboardButton("▶️ Contact OWNER", url="https://t.me/Rolax112")])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_start")])
         await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "menu_referral":
@@ -1851,18 +2075,19 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bots = get_bots()
         user_bots_count = sum(1 for b in bots.values() if b.get("owner_id") == user.id)
         max_bots = get_user_max_bots(user.id)
-        is_prem = u_data.get("premium", False)
-        plan_str = "Premium VIP (Infinity Host)" if is_prem else f"Free Member (Max Bots: {max_bots})"
-        credits = u_data.get("credits", 1.0)
+        plan = get_user_plan(user.id, users)
+        is_prem = is_user_premium(user.id, users)
+        plan_str = plan.get("name", "Basic Plan")
+        credits = "Unlimited Credits" if plan_has_unlimited_credits(plan) else f"{round(u_data.get('credits', 1.0), 2)} Credits"
         cfg = get_config()
         text = (
             f"👤 Account Profile Matrix\n\n"
             f"🆔 Telegram Chat ID: {user.id}\n"
             f"🏷️ Username: @{user.username or 'N/A'}\n"
             f"💎 Current Membership: {plan_str}\n"
-            f"💰 Wallet Credits: {round(credits, 2)} Credits\n\n"
+            f"💰 Wallet Credits: {credits}\n\n"
             f"📊 Resource Quota Allocations:\n"
-            f"🤖 Deployed Instances: {user_bots_count} / {max_bots}\n"
+            f"🤖 Deployed Instances: {user_bots_count} / {'Unlimited' if plan_has_unlimited_credits(plan) else max_bots}\n"
             f"⚡ CPU Limit Per Core: {cfg.get('default_cpu_limit', 8.0)}\n"
             f"🧠 RAM Limit Cap: {cfg.get('default_ram_limit', 8192)} MB\n"
             f"💾 Cloud Backups: Enabled ✅\n"
@@ -1894,8 +2119,9 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not user_bots:
             bots_info_str = "\n\nHosted Applications: None"
 
-        is_prem = u_data.get("premium", False)
-        plan_str = "Premium VIP" if is_prem else "Free Member"
+        plan = get_user_plan(user.id, users)
+        is_prem = is_user_premium(user.id, users)
+        plan_str = plan.get("name", "Basic Plan")
         text = (
             f"📊 Live Telemetry Dashboard\n\n"
             f"💎 Plan Tier: {plan_str} | Bots: {len(user_bots)}\n"
@@ -2201,6 +2427,55 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data["awaiting_rem_prem"] = True
         await safe_edit(query, "❌ Remove Premium VIP\nSend User Chat ID below:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")]]))
+
+    elif data == "adm_plans" and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        await safe_edit(query, plan_admin_text(), parse_mode="Markdown", reply_markup=plan_admin_keyboard())
+
+    elif data == "adm_plan_add" and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        clear_user_flow(context)
+        context.user_data["awaiting_plan_add"] = True
+        await safe_edit(query,
+            "➕ Add Membership Plan\n\n"
+            "Send: ID | NAME | PRICE_INR/contact | DAYS | MAX_BOTS/unlimited | AI 0/1\n"
+            "Example: basic2 | Basic 2 | 49 | 30 | 2 | 0",
+            reply_markup=admin_back_kb())
+
+    elif data.startswith("adm_plan_edit_") and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        slug = data[len("adm_plan_edit_"):].strip().lower()
+        if slug not in get_plans():
+            await safe_answer(query, "Plan nahi mila.", show_alert=True)
+            return
+        clear_user_flow(context)
+        context.user_data[f"awaiting_plan_edit_{slug}"] = True
+        item = get_plans()[slug]
+        max_bots = "unlimited" if plan_has_unlimited_credits(item) else str(item.get("max_bots", 1))
+        await safe_edit(query,
+            f"✏️ Edit {item.get('name', slug)}\n\n"
+            "Send: NAME | PRICE_INR/contact | DAYS | MAX_BOTS/unlimited | AI 0/1\n"
+            f"Current: {item.get('name', slug)} | {plan_price_label(item)} | {item.get('duration_days', 30)} | {max_bots} | {1 if item.get('ai_autofix') else 0}",
+            reply_markup=admin_back_kb())
+
+    elif data.startswith("adm_plan_toggle_") and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        slug = data[len("adm_plan_toggle_"):].strip().lower()
+        plans = get_plans()
+        if slug in plans:
+            plans[slug]["active"] = not plans[slug].get("active", True)
+            save_plans(plans)
+            log_audit_action(f"Toggled membership plan {slug} to {'ON' if plans[slug]['active'] else 'OFF'}", user.id)
+        query.data = "adm_plans"
+        return True
 
     elif data == "adm_restrict_user" and is_admin(user.id):
         if int(user.id) != int(ADMIN_ID):
@@ -2996,6 +3271,48 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if is_admin(user.id):
+        if context.user_data.pop("awaiting_plan_add", False):
+            if int(user.id) != int(ADMIN_ID):
+                return
+            slug, plan, error = parse_plan_input(text)
+            if error:
+                await safe_reply(update.message, "❌ " + error)
+                return
+            plans = get_plans()
+            if slug in plans:
+                await safe_reply(update.message, "Ye plan ID already exist karti hai. Existing plan ke Edit button ka use karein.")
+                return
+            if slug != "premium":
+                plan["ai_autofix"] = False
+            plans[slug] = plan
+            save_plans(plans)
+            log_audit_action(f"Added membership plan {slug}", user.id)
+            await safe_reply(update.message, f"✅ Plan added: {plan.get('name')}\nPrice: {plan_price_label(plan)}\nValidity: {plan_duration_label(plan)}\nMax bots: {'Unlimited' if plan_has_unlimited_credits(plan) else plan.get('max_bots')}\nAI: {'ON' if plan.get('ai_autofix') else 'OFF'}", reply_markup=plan_admin_keyboard())
+            return
+
+        edit_plan_key = next((k for k in list(context.user_data) if str(k).startswith("awaiting_plan_edit_")), None)
+        if edit_plan_key:
+            if int(user.id) != int(ADMIN_ID):
+                return
+            slug = str(edit_plan_key).replace("awaiting_plan_edit_", "", 1).strip().lower()
+            context.user_data.pop(edit_plan_key, None)
+            slug, plan, error = parse_plan_input(text, slug)
+            if error:
+                await safe_reply(update.message, "❌ " + error)
+                return
+            plans = get_plans()
+            if slug not in plans:
+                await safe_reply(update.message, "Plan nahi mila. Pehle Add Plan use karein.")
+                return
+            plan["active"] = plans[slug].get("active", True)
+            if slug != "premium":
+                plan["ai_autofix"] = False
+            plans[slug] = plan
+            save_plans(plans)
+            log_audit_action(f"Edited membership plan {slug}", user.id)
+            await safe_reply(update.message, f"✅ Plan updated: {plan.get('name')}\nPrice: {plan_price_label(plan)}\nValidity: {plan_duration_label(plan)}\nMax bots: {'Unlimited' if plan_has_unlimited_credits(plan) else plan.get('max_bots')}\nAI: {'ON' if plan.get('ai_autofix') else 'OFF'}", reply_markup=plan_admin_keyboard())
+            return
+
         if context.user_data.pop("awaiting_dm_user", False):
             if int(user.id) != int(ADMIN_ID):
                 return
@@ -3310,10 +3627,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 users = get_users()
                 if target_uid in users:
                     users[target_uid]["premium"] = False
+                    users[target_uid]["plan_id"] = "basic"
+                    users[target_uid]["plan_expiry"] = None
                     users[target_uid]["premium_expiry"] = None
                     save_users(users)
                     log_audit_action(f"Removed Premium status via panel from User {target_uid}", user.id)
-                    await safe_reply(update.message, f"User {target_uid} has been downgraded to Free Member.")
+                    await safe_reply(update.message, f"User {target_uid} has been downgraded to Basic Plan.")
                     try:
                         await context.bot.send_message(int(target_uid), "Your Premium VIP status has been removed by the admin.")
                     except Exception:
@@ -3652,6 +3971,7 @@ def main() -> None:
     get_bots()
     get_pending()
     get_config()
+    get_plans()
     get_admins()
     get_force_join()
     get_redeem_codes()
