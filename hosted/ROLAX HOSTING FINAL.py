@@ -88,7 +88,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.26"
+VERSION = "3.27"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -1714,15 +1714,21 @@ async def add_premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ==================== CALLBACK ROUTER ====================
 
-async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Actual routing. Returns True when the callback should be re-routed
-    (e.g. after restart/stop the control screen must be redrawn)."""
+async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                         callback_data: Optional[str] = None):
+    """Actual routing.
+
+    ``CallbackQuery.data`` is read-only in python-telegram-bot.  Redirects
+    therefore pass the next callback payload explicitly instead of mutating
+    the Telegram object (which raised ``AttributeError: Attribute data of
+    class CallbackQuery can't be set`` on restart/stop/back flows).
+    """
     query = getattr(update, "callback_query", None)
     if query is None or getattr(query, "from_user", None) is None:
         logger.info("Ignoring callback update without a Telegram user")
         return False
     user = query.from_user
-    data = query.data
+    data = query.data if callback_data is None else callback_data
 
     log_button_click(user.id, user.username or "N/A", data)
 
@@ -1908,9 +1914,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not binfo or binfo.get("owner_id") != user.id:
             # BACK BUTTON FIX: a deleted bot left a dead screen with dead buttons.
             await safe_answer(query, "This bot no longer exists. Opening your fleet...", show_alert=True)
-            query.data = "menu_mybots"
-            return True
-            return
+            return "menu_mybots"
 
         status = binfo.get("status", "STOPPED")
         status_text = "RUNNING 🟢" if status == "RUNNING" else "STOPPED 🔴"
@@ -1957,23 +1961,19 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not binfo or binfo.get("owner_id") != user.id:
             await safe_answer(query, "This bot no longer exists. Opening your fleet...", show_alert=True)
-            query.data = "menu_mybots"
-            return True
-            return
+            return "menu_mybots"
 
         if action == "restart":
             start_bot_process(bot_id)
             log_session_action(user.id, user.username or "N/A", f"Restarted Bot #{bot_id}")
             await safe_answer(query, "Application successfully restarted!", show_alert=True)
-            query.data = f"bot_control_{bot_id}"
-            return True
+            return f"bot_control_{bot_id}"
 
         elif action == "stop":
             stop_bot_process(bot_id)
             log_session_action(user.id, user.username or "N/A", f"Stopped Bot #{bot_id}")
             await safe_answer(query, "Application stopped.", show_alert=True)
-            query.data = f"bot_control_{bot_id}"
-            return True
+            return f"bot_control_{bot_id}"
 
         elif action == "delete":
             stop_bot_process(bot_id)
@@ -1986,8 +1986,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_bots(bots)
             log_session_action(user.id, user.username or "N/A", f"Deleted Bot #{bot_id}")
             await safe_answer(query, "Application purged completely.", show_alert=True)
-            query.data = "menu_mybots"
-            return True
+            return "menu_mybots"
 
         elif action == "stats":
             cpu, ram = get_bot_resource_usage(bot_id)
@@ -2023,8 +2022,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_bots(bots)
             state_str = "ENABLED 🟢" if binfo["autofix"] else "DISABLED 🔴"
             await safe_answer(query, f"Auto-Fix guardian set to {state_str}", show_alert=True)
-            query.data = f"bot_control_{bot_id}"
-            return True
+            return f"bot_control_{bot_id}"
 
         elif action == "files":
             bot_dir = os.path.dirname(binfo["path"])
@@ -2068,8 +2066,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif stype == "af":
             u_info["autofix"] = not u_info.get("autofix", True)
         save_users(users)
-        query.data = "menu_settings"
-        return True
+        return "menu_settings"
 
     elif data == "menu_account":
         bots = get_bots()
@@ -2474,8 +2471,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plans[slug]["active"] = not plans[slug].get("active", True)
             save_plans(plans)
             log_audit_action(f"Toggled membership plan {slug} to {'ON' if plans[slug]['active'] else 'OFF'}", user.id)
-        query.data = "adm_plans"
-        return True
+        return "adm_plans"
 
     elif data == "adm_restrict_user" and is_admin(user.id):
         if int(user.id) != int(ADMIN_ID):
@@ -2834,9 +2830,14 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     if not _has_user_update(update) or getattr(update, "callback_query", None) is None:
         logger.info("Ignoring callback update without a Telegram user")
         return
+    next_callback_data = None
     for _ in range(5):
-        if not await _route_callback(update, context):
+        redirect = await _route_callback(update, context, next_callback_data)
+        if not redirect:
             return
+        # Redirects are returned as the next callback payload.  Never assign
+        # to query.data: python-telegram-bot exposes it as a read-only field.
+        next_callback_data = redirect if isinstance(redirect, str) else None
     logger.warning("Callback re-dispatch limit reached, stopping")
 
 
