@@ -175,10 +175,21 @@ async function ensureDefaultWebhook(req: NextRequest) {
   if (!origin || /localhost|127\.0\.0\.1/.test(origin)) return { ok: false, url: "" };
   const url = `${origin.replace(/\/$/, "")}/api/rolax_webhook`;
   const info = await tg(reg.token, "getWebhookInfo");
-  if (info?.result?.url !== url || info?.result?.has_custom_certificate) {
+  const currentUrl = String(info?.result?.url || "");
+  let sameWebhookPath = false;
+  try {
+    const current = new URL(currentUrl);
+    const expected = new URL(url);
+    // The Python webhook stores the encrypted Telegram user snapshot in the
+    // query string. Never replace that URL with a clean one during a dashboard
+    // health check, otherwise every deploy would lose the persisted list.
+    sameWebhookPath = current.origin === expected.origin && current.pathname === expected.pathname;
+  } catch { /* Telegram has no configured webhook yet */ }
+  if (!sameWebhookPath || info?.result?.has_custom_certificate) {
     const set = await tg(reg.token, "setWebhook", {
       url,
       drop_pending_updates: false,
+      max_connections: 1,
       secret_token: webhookSecret(reg.token),
       allowed_updates: ["message", "edited_message", "callback_query", "channel_post"],
     });

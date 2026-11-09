@@ -39,6 +39,7 @@ import subprocess
 import base64
 import hashlib
 import hmac
+import zlib
 
 
 # ---------------------------------------------------------------------
@@ -94,7 +95,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.31"
+VERSION = "3.32"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -233,13 +234,35 @@ def load_json(filename: str, default: Any) -> Any:
         with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
+        # A half-written file must never turn a real user database into an
+        # empty database. Atomic saves create a .bak before replacing the live
+        # file, so recover that copy first when JSON is damaged.
+        backup = f"{filename}.bak"
+        try:
+            if os.path.exists(backup):
+                with open(backup, "r", encoding="utf-8") as f:
+                    recovered = json.load(f)
+                logger.warning("Recovered %s from backup after read error: %s", filename, e)
+                return recovered
+        except Exception:
+            pass
         logger.error(f"Error loading {filename}: {e}")
         return default
 
 def save_json(filename: str, data: Any) -> None:
-    """Atomic write: a crash mid-save can never truncate the database files."""
+    """Atomic write with a last-known-good backup.
+
+    The user database is deliberately never truncated in place. If a host
+    restarts during a write, the next request can recover the previous copy.
+    """
     tmp = f"{filename}.tmp"
+    backup = f"{filename}.bak"
     try:
+        if os.path.exists(filename):
+            try:
+                shutil.copyfile(filename, backup)
+            except OSError:
+                pass
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
             f.flush()
@@ -253,14 +276,121 @@ def save_json(filename: str, data: Any) -> None:
         except OSError:
             pass
 
-def get_users() -> dict: return load_json(USERS_FILE, {})
-def save_users(data: dict) -> None: save_json(USERS_FILE, data)
+def _merge_user_maps(current: dict, incoming: dict) -> dict:
+    """Merge user records by Telegram chat ID without ever deleting a user."""
+    merged = dict(current) if isinstance(current, dict) else {}
+    if not isinstance(incoming, dict):
+        return merged
+    for raw_uid, raw_info in incoming.items():
+        uid = str(raw_uid)
+        if not isinstance(raw_info, dict):
+            continue
+        old = merged.get(uid)
+        if isinstance(old, dict):
+            # Incoming fields are newer, but unknown fields from an older
+            # record remain intact (credits, plan, bans, referrals, etc.).
+            merged[uid] = {**old, **raw_info}
+        else:
+            merged[uid] = dict(raw_info)
+    return merged
+
+def get_users() -> dict:
+    users = load_json(USERS_FILE, {})
+    return users if isinstance(users, dict) else {}
+
+def save_users(data: dict) -> None:
+    # Several webhook instances can handle adjacent updates. Read/merge/write
+    # instead of replacing users.json with an older request's snapshot.
+    existing = get_users()
+    save_json(USERS_FILE, _merge_user_maps(existing, data))
+
 def get_bots() -> dict: return load_json(BOTS_FILE, {})
 def save_bots(data: dict) -> None: save_json(BOTS_FILE, data)
 def get_pending() -> dict: return load_json(PENDING_FILE, {})
 def save_pending(data: dict) -> None: save_json(PENDING_FILE, data)
 def get_redeem_codes() -> dict: return load_json(REDEEM_FILE, {})
 def save_redeem_codes(data: dict) -> None: save_json(REDEEM_FILE, data)
+
+
+# ==================== DEPLOY-SAFE USER SNAPSHOT ====================
+# Vercel functions have no persistent local disk. The webhook adapter stores a
+# compact, authenticated snapshot in Telegram's webhook URL so a new function
+# instance/redeployment can restore the user list before handling /start.
+# The blob is encrypted with the bot token; it contains no token or secret.
+_WEBHOOK_STATE_ENV = os.environ.get("ROLAX_WEBHOOK_STATE", "").strip()
+_WEBHOOK_STATE_MAX_CHARS = 7000
+
+
+def _webhook_state_key() -> bytes:
+    return hmac.new(str(BOT_TOKEN).encode("utf-8"), b"rolax-user-state-v1", hashlib.sha256).digest()
+
+
+def _state_stream(key: bytes, nonce: bytes, size: int) -> bytes:
+    chunks = []
+    counter = 0
+    while sum(len(c) for c in chunks) < size:
+        chunks.append(hmac.new(key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest())
+        counter += 1
+    return b"".join(chunks)[:size]
+
+
+def _seal_webhook_state(payload: dict) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    packed = zlib.compress(raw, 9)
+    key = _webhook_state_key()
+    # Deterministic nonce means unchanged state produces the same URL, so the
+    # adapter does not call setWebhook for every ordinary Telegram update.
+    nonce = hmac.new(key, b"nonce:" + packed, hashlib.sha256).digest()[:16]
+    cipher = bytes(a ^ b for a, b in zip(packed, _state_stream(key, nonce, len(packed))))
+    tag = hmac.new(key, b"v1" + nonce + cipher, hashlib.sha256).digest()[:16]
+    token = base64.urlsafe_b64encode(b"v1" + nonce + tag + cipher).decode("ascii").rstrip("=")
+    return token
+
+
+def _open_webhook_state(token: str) -> Optional[dict]:
+    try:
+        padded = str(token or "") + ("=" * (-len(str(token or "")) % 4))
+        blob = base64.urlsafe_b64decode(padded.encode("ascii"))
+        if len(blob) < 34 or blob[:2] != b"v1":
+            return None
+        nonce, tag, cipher = blob[2:18], blob[18:34], blob[34:]
+        key = _webhook_state_key()
+        expected = hmac.new(key, b"v1" + nonce + cipher, hashlib.sha256).digest()[:16]
+        if not hmac.compare_digest(tag, expected):
+            return None
+        packed = bytes(a ^ b for a, b in zip(cipher, _state_stream(key, nonce, len(cipher))))
+        value = json.loads(zlib.decompress(packed).decode("utf-8"))
+        return value if isinstance(value, dict) else None
+    except Exception as e:
+        logger.warning("Ignoring invalid webhook user snapshot: %s", e)
+        return None
+
+
+def _restore_webhook_state() -> None:
+    if not _WEBHOOK_STATE_ENV:
+        return
+    snapshot = _open_webhook_state(_WEBHOOK_STATE_ENV)
+    remote_users = snapshot.get("users") if isinstance(snapshot, dict) else None
+    if not isinstance(remote_users, dict) or not remote_users:
+        return
+    local_users = get_users()
+    merged = _merge_user_maps(local_users, remote_users)
+    if merged != local_users:
+        save_json(USERS_FILE, merged)
+        logger.info("Restored %s Telegram user records from webhook snapshot", len(remote_users))
+
+
+_restore_webhook_state()
+
+
+def export_webhook_state() -> str:
+    """Return the latest encrypted user-list snapshot for the adapter."""
+    users = get_users()
+    token = _seal_webhook_state({"version": 1, "users": users})
+    if len(token) > _WEBHOOK_STATE_MAX_CHARS:
+        logger.error("Telegram user snapshot is too large for webhook URL (%s chars)", len(token))
+        return ""
+    return token
 
 def get_admins() -> list:
     admins = load_json(ADMINS_FILE, [ADMIN_ID])
@@ -1904,16 +2034,31 @@ def get_start_text(user_first_name: str, user_bot_count: int, max_bots: int, is_
     )
 
 def register_user(user, referrer_id: Optional[str] = None) -> dict:
+    """Create or refresh one Telegram user without replacing the user list.
+
+    This runs for /start and every other user update. A user therefore appears
+    in the admin list on their first command/message, even when Telegram did
+    not attach a normal command entity. Existing plan, credits, ban, referral,
+    and hosting fields are always preserved.
+    """
     users = get_users()
-    uid = str(user.id)
+    uid = str(int(user.id))
+    username = str(getattr(user, "username", "") or "").strip().lstrip("@")
+    first_name = str(getattr(user, "first_name", "") or "").strip()
+    last_name = str(getattr(user, "last_name", "") or "").strip()
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     config = get_config()
     ref_reward = config.get("referral_reward", 0.25)
+    is_new = uid not in users or not isinstance(users.get(uid), dict)
 
-    if uid not in users:
+    if is_new:
         users[uid] = {
-            "username": user.username or "N/A",
-            "name": user.first_name,
-            "joined": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "chat_id": int(user.id),
+            "username": username or "N/A",
+            "name": first_name or username or "N/A",
+            "last_name": last_name,
+            "joined": now,
+            "last_seen": now,
             "banned": False,
             "restricted": False,
             "premium": False,
@@ -1923,33 +2068,56 @@ def register_user(user, referrer_id: Optional[str] = None) -> dict:
             "crash_alerts": True,
             "autofix": True,
             "referred_by": None,
-            "credits": 1.0
+            "credits": 1.0,
         }
         if referrer_id and referrer_id != uid and referrer_id in users:
-            referred_user_data = users[uid]
-            if not referred_user_data.get("referred_by_checked"):
+            if not users[uid].get("referred_by_checked"):
                 users[uid]["referred_by"] = referrer_id
                 users[uid]["referred_by_checked"] = True
                 users[referrer_id]["credits"] = users[referrer_id].get("credits", 1.0) + ref_reward
                 log_session_action(int(referrer_id), users[referrer_id].get("username", "N/A"), f"Received referral bonus (+{ref_reward}) from User {uid}")
-        log_session_action(user.id, user.username or "N/A", "New User Registered")
+        log_session_action(user.id, username or "N/A", "New User Registered")
     else:
-        users[uid]["username"] = user.username or "N/A"
-        users[uid]["name"] = user.first_name
-        if "credits" not in users[uid]:
-            users[uid]["credits"] = 1.0
-        if "restricted" not in users[uid]:
-            users[uid]["restricted"] = False
-        if "premium_expiry" not in users[uid]:
-            users[uid]["premium_expiry"] = None
-        if "plan_id" not in users[uid]:
-            users[uid]["plan_id"] = "premium" if users[uid].get("premium", False) else "basic"
-        if "plan_expiry" not in users[uid]:
-            users[uid]["plan_expiry"] = users[uid].get("premium_expiry")
-        log_session_action(user.id, user.username or "N/A", "User Session Started / /start")
+        record = users[uid]
+        record["chat_id"] = int(user.id)
+        # Do not replace a known username with N/A when the user hides it.
+        if username:
+            record["username"] = username
+        else:
+            record.setdefault("username", "N/A")
+        if first_name:
+            record["name"] = first_name
+        else:
+            record.setdefault("name", record.get("username", "N/A"))
+        if last_name:
+            record["last_name"] = last_name
+        record["last_seen"] = now
+        record.setdefault("joined", now)
+        record.setdefault("banned", False)
+        record.setdefault("restricted", False)
+        record.setdefault("premium", False)
+        record.setdefault("credits", 1.0)
+        record.setdefault("crash_alerts", True)
+        record.setdefault("autofix", True)
+        record.setdefault("premium_expiry", None)
+        record.setdefault("plan_id", "premium" if record.get("premium", False) else "basic")
+        record.setdefault("plan_expiry", record.get("premium_expiry"))
+        log_session_action(user.id, username or record.get("username", "N/A"), "User Session Started")
 
     save_users(users)
     return users[uid]
+
+
+def ensure_update_user(update: object) -> Optional[dict]:
+    """Register the Telegram sender before any command/menu logic runs."""
+    if not _has_user_update(update):
+        return None
+    try:
+        return register_user(getattr(update, "effective_user"))
+    except Exception as exc:
+        logger.error("Could not register incoming Telegram user: %s", exc)
+        return None
+
 
 def get_user_max_bots(user_id: int) -> int:
     users = get_users()
@@ -2137,6 +2305,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not _has_user_update(update):
         logger.info("Ignoring menu command from a non-user Telegram update")
         return
+    ensure_update_user(update)
     clear_user_flow(context)
     if update.callback_query:
         await render_main_menu(update.callback_query, update.effective_user, context)
@@ -2156,21 +2325,11 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     code = args[0].strip()
     codes = get_redeem_codes()
+    # /redeem also counts as a first interaction; register the user before
+    # validating the code so the admin list is never missing that chat ID.
+    register_user(user)
     users = get_users()
     uid = str(user.id)
-
-    # FIX: /redeem before /start raised KeyError(users[uid]) and crashed.
-    if uid not in users:
-        users[uid] = {
-            "username": user.username or "N/A",
-            "name": user.first_name or "N/A",
-            "joined": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "banned": False, "restricted": False, "premium": False,
-            "plan_id": "basic", "plan_expiry": None,
-            "premium_expiry": None, "crash_alerts": True, "autofix": True,
-            "referred_by": None, "credits": 1.0
-        }
-        save_users(users)
 
     if code not in codes:
         await safe_reply(update.message, "Invalid or expired redeem code.")
@@ -2218,6 +2377,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not _has_user_update(update):
         logger.info("Ignoring admin command from a non-user Telegram update")
         return
+    ensure_update_user(update)
     user = update.effective_user
     if not is_admin(user.id):
         await safe_reply(update.message, "You are not authorized to use the admin panel.")
@@ -2255,6 +2415,7 @@ async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not _has_user_update(update):
         logger.info("Ignoring add-admin command from a non-user Telegram update")
         return
+    ensure_update_user(update)
     user = update.effective_user
     if int(user.id) != int(ADMIN_ID):
         await safe_reply(update.message, "Only Super Owner can add new admins.")
@@ -2286,6 +2447,7 @@ async def add_premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not _has_user_update(update):
         logger.info("Ignoring add-premium command from a non-user Telegram update")
         return
+    ensure_update_user(update)
     user = update.effective_user
     if not is_admin(user.id):
         return
@@ -3585,6 +3747,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     if not _has_user_update(update) or getattr(update, "callback_query", None) is None:
         logger.info("Ignoring callback update without a Telegram user")
         return
+    ensure_update_user(update)
     next_callback_data = None
     for _ in range(5):
         redirect = await _route_callback(update, context, next_callback_data)
@@ -3612,7 +3775,7 @@ HELP_TEXT = (
     "3️⃣ Bot start ho jayega — 🤖 My Bots me sab control milta hai\n"
     "4️⃣ 📁 File Manager se files dekho / edit karo\n"
     "5️⃣ 🛑 Stop se bot band, 🗑️ Delete se hamesha ke liye hatao\n\n"
-    "**Buttons kaam na karein to:** neeche ki keyboard me Main Menu ka button dabao (ya /start bhejo) — sab reset ho jayega.\n\n"
+    "**Buttons kaam na karein to:** neeche ki keyboard me Main Menu ka button dabao (ya /start bhejo) — sirf menu flow reset hoga, user list safe rahegi.\n\n"
     "**Support:** @Rolax112\n"
     "**Channel:** " + OFFICIAL_CHANNEL_URL + "\n"
     "**Version:** v" + VERSION
@@ -3664,6 +3827,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not _has_user_update(update):
         logger.info("Ignoring help command from a non-user Telegram update")
         return
+    ensure_update_user(update)
     clear_user_flow(context)
     text = HELP_TEXT
     await safe_reply(
@@ -3685,6 +3849,7 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not _has_user_update(update):
         logger.info("Ignoring unknown command from a non-user Telegram update")
         return
+    ensure_update_user(update)
     clear_user_flow(context)
     raw = (update.message.text or "") if update.message else ""
     target = _resolve_command_name(raw)
@@ -3716,6 +3881,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not _has_user_update(update):
         logger.info("Ignoring document update without a Telegram user")
         return
+    ensure_update_user(update)
     user = update.effective_user
     users = get_users()
     u_data = users.get(str(user.id), {})
@@ -3835,6 +4001,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not _has_user_update(update):
         logger.info("Ignoring photo update without a Telegram user")
         return
+    ensure_update_user(update)
     user = update.effective_user
     if is_admin(user.id) and context.user_data.pop("awaiting_media_broadcast", False):
         if int(user.id) != int(ADMIN_ID):
@@ -3857,6 +4024,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not _has_user_update(update):
         logger.info("Ignoring video update without a Telegram user")
         return
+    ensure_update_user(update)
     user = update.effective_user
     if is_admin(user.id) and context.user_data.pop("awaiting_media_broadcast", False):
         if int(user.id) != int(ADMIN_ID):
@@ -3888,6 +4056,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _has_user_update(update):
         logger.info("Ignoring text update without a Telegram user")
         return
+    ensure_update_user(update)
     user = update.effective_user
     text = (update.message.text or "").strip()
     if not text:
