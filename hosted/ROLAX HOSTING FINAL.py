@@ -88,7 +88,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.27"
+VERSION = "3.28"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -438,72 +438,214 @@ def plan_has_unlimited_credits(plan: dict) -> bool:
         return str(plan.get("max_bots", "")).lower() in ("unlimited", "infinity", "infinite")
 
 
-def parse_plan_input(text: str, slug: Optional[str] = None) -> tuple[Optional[str], Optional[dict], str]:
-    """Parse admin format: slug | name | price/contact | days | max_bots/unlimited | ai 0/1."""
-    parts = [p.strip() for p in str(text or "").split("|")]
-    if slug is None:
-        if len(parts) != 6:
-            return None, None, "Format: ID | NAME | PRICE_INR/contact | DAYS | MAX_BOTS/unlimited | AI 0/1"
-        slug = re.sub(r"[^a-z0-9_-]+", "-", parts[0].lower()).strip("-_")
-        name, price_raw, days_raw, max_raw, ai_raw = parts[1:]
-    else:
-        if len(parts) != 5:
-            return None, None, "Format: NAME | PRICE_INR/contact | DAYS | MAX_BOTS/unlimited | AI 0/1"
-        name, price_raw, days_raw, max_raw, ai_raw = parts
-        slug = re.sub(r"[^a-z0-9_-]+", "-", str(slug).lower()).strip("-_")
-    if not slug or not name:
-        return None, None, "Plan ID aur name required hain."
-    try:
-        days = int(days_raw)
-        if days < 1 or days > 3650:
-            raise ValueError
-    except (TypeError, ValueError):
-        return None, None, "Days 1 se 3650 ke beech hone chahiye."
-    try:
-        max_bots = 999999 if max_raw.lower() in ("unlimited", "infinity", "infinite") else int(max_raw)
-        if max_bots < 1:
-            raise ValueError
-    except (TypeError, ValueError):
-        return None, None, "Max bots positive number ya unlimited hona chahiye."
-    if price_raw.lower() in ("", "contact", "admin", "dm", "free"):
-        price = None
-    else:
-        try:
-            price = float(price_raw.replace(",", ""))
-            if price < 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            return None, None, "Price numeric ya contact hona chahiye."
-    ai = ai_raw.lower() in ("1", "yes", "true", "on", "ai")
-    return slug, {
-        "id": slug, "name": name[:60], "price_inr": price,
-        "duration_days": days, "max_bots": max_bots,
-        "ai_autofix": ai, "active": True,
-    }, ""
-
-
 def plan_admin_text() -> str:
-    lines = ["💳 **Membership Plan Manager**", "", "Price/payment yahin set hoga; payment direct @Rolax112 DM se hi rahega.", ""]
+    lines = [
+        "💳 MEMBERSHIP PLAN STUDIO",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "Price/payment yahin set hoga; payment direct @Rolax112 DM se hi rahega.",
+        "",
+    ]
     for slug, plan in get_plans().items():
-        ai = "AI ON" if plan.get("ai_autofix") else "AI OFF"
-        state = "ON" if plan.get("active", True) else "OFF"
+        ai = "🧠 AI ON" if plan.get("ai_autofix") else "🧠 AI OFF"
+        state = "🟢 ACTIVE" if plan.get("active", True) else "⚪ PAUSED"
         max_bots = "Unlimited" if plan_has_unlimited_credits(plan) else str(plan.get("max_bots", 1))
-        lines.append(f"• `{slug}` — {plan.get('name', slug)} [{state}]\n  {plan_price_label(plan)} / {plan_duration_label(plan)} • {max_bots} bot(s) • {ai}")
-    lines.append("\nAdd format: `id | name | price/contact | days | max_bots/unlimited | ai 0/1`")
-    lines.append("Edit format: `name | price/contact | days | max_bots/unlimited | ai 0/1`")
+        lines.append(
+            f"╭━━ {plan.get('name', slug)}\n"
+            f"┃ ID: {slug} • {state}\n"
+            f"┃ 💰 {plan_price_label(plan)}  •  ⏳ {plan_duration_label(plan)}\n"
+            f"┃ 🤖 {max_bots} bot(s)  •  {ai}\n"
+            "╰──────────────"
+        )
+    lines.extend([
+        "",
+        "✅ Add ya Edit button dabao.",
+        "Bot tumse har value alag message mein poochega — kisi pipe/format ki zaroorat nahi.",
+        "AI access safety ke liye sirf Premium par active save hota hai.",
+        "Custom plans ko Remove kiya ja sakta hai; Basic/Classic/Premium ko Pause/Resume karo.",
+    ])
     return "\n".join(lines)
 
 
 def plan_admin_keyboard() -> InlineKeyboardMarkup:
     rows = []
     for slug, plan in get_plans().items():
+        state_button = "🟢 Active" if plan.get("active", True) else "⚪ Paused"
         rows.append([
-            InlineKeyboardButton(f"✏️ {plan.get('name', slug)}", callback_data=f"adm_plan_edit_{slug}"),
-            InlineKeyboardButton("ON" if plan.get("active", True) else "OFF", callback_data=f"adm_plan_toggle_{slug}"),
+            InlineKeyboardButton(f"✏️ Edit {plan.get('name', slug)}", callback_data=f"adm_plan_edit_{slug}"),
+            InlineKeyboardButton(state_button, callback_data=f"adm_plan_toggle_{slug}"),
         ])
-    rows.append([InlineKeyboardButton("➕ Add Plan", callback_data="adm_plan_add")])
-    rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")])
+        if slug not in DEFAULT_PLAN_CATALOG:
+            rows.append([InlineKeyboardButton(f"🗑️ Remove {plan.get('name', slug)}", callback_data=f"adm_plan_remove_{slug}")])
+    rows.append([InlineKeyboardButton("➕ Create New Plan", callback_data="adm_plan_add")])
+    rows.append([InlineKeyboardButton("⬅️ Admin Dashboard", callback_data="adm_back")])
     return InlineKeyboardMarkup(rows)
+
+
+_PLAN_WIZARD_STEPS = {
+    "add": ("id", "name", "price", "days", "max_bots", "ai"),
+    "edit": ("name", "price", "days", "max_bots", "ai"),
+}
+_PLAN_WIZARD_LABELS = {
+    "id": "Plan ID",
+    "name": "Plan name",
+    "price": "Price in rupees or contact option",
+    "days": "Validity in days",
+    "max_bots": "Maximum hosted bots",
+    "ai": "AI eligibility",
+}
+
+
+def plan_wizard_prompt(state: dict, error: str = "") -> str:
+    """Return one clear question for the next plan-manager step.
+
+    The wizard deliberately asks for one value per Telegram message. This is
+    easier on mobile and avoids making the owner remember a pipe-separated
+    format when adding or editing a plan.
+    """
+    mode = str(state.get("mode", "add"))
+    step = str(state.get("step", "id"))
+    number = _PLAN_WIZARD_STEPS.get(mode, _PLAN_WIZARD_STEPS["add"]).index(step) + 1
+    total = len(_PLAN_WIZARD_STEPS.get(mode, _PLAN_WIZARD_STEPS["add"]))
+    prefix = "✏️ Edit Membership Plan" if mode == "edit" else "➕ Create Membership Plan"
+    lines = [f"{prefix}", "━━━━━━━━━━━━━━━━━━━━", f"Step {number}/{total} • {_PLAN_WIZARD_LABELS.get(step, step)}"]
+    if error:
+        lines.extend([f"❌ {error}", ""])
+    if step == "id":
+        lines.append("Plan ID bhejo (example: student, classic2, festival). Sirf letters, numbers, _ ya -.")
+    elif step == "name":
+        lines.append("Plan ka display name bhejo (example: Classic Plus).")
+    elif step == "price":
+        lines.append("Price bhejo, jaise 99, ya free/contact/dm likho.")
+    elif step == "days":
+        lines.append("Validity ke total days bhejo (1 se 3650).")
+    elif step == "max_bots":
+        lines.append("Maximum bots bhejo, jaise 3, ya unlimited likho.")
+    elif step == "ai":
+        lines.append("AI access ke liye yes ya no bhejo. Safety ke liye AI sirf Premium plan par save hoga.")
+    lines.extend(["", "Har step ka jawab alag message mein bhejo.", "Cancel karne ke liye /cancel bhejo."])
+    return "\n".join(lines)
+
+
+def _parse_plan_wizard_value(step: str, text: str):
+    value = str(text or "").strip()
+    if step == "id":
+        slug = re.sub(r"[^a-z0-9_-]+", "-", value.lower()).strip("-_")
+        if not slug or len(slug) > 32 or slug != value.lower():
+            return None, "Plan ID simple rakho: letters, numbers, _ ya -; spaces mat use karo."
+        return slug, ""
+    if step == "name":
+        if not value:
+            return None, "Plan name khali nahi ho sakta."
+        return value[:60], ""
+    if step == "price":
+        if value.lower() in ("", "free", "contact", "admin", "dm"):
+            return None, ""
+        try:
+            price = float(value.replace("₹", "").replace(",", "").strip())
+            if price < 0:
+                raise ValueError
+            return price, ""
+        except (TypeError, ValueError):
+            return None, "Price number ya free/contact/dm hona chahiye."
+    if step == "days":
+        try:
+            days = int(value)
+            if days < 1 or days > 3650:
+                raise ValueError
+            return days, ""
+        except (TypeError, ValueError):
+            return None, "Validity 1 se 3650 ke beech ka whole number bhejo."
+    if step == "max_bots":
+        if value.lower() in ("unlimited", "infinity", "infinite"):
+            return 999999, ""
+        try:
+            max_bots = int(value)
+            if max_bots < 1:
+                raise ValueError
+            return max_bots, ""
+        except (TypeError, ValueError):
+            return None, "Maximum bots positive number ya unlimited hona chahiye."
+    if step == "ai":
+        if value.lower() in ("yes", "y", "1", "on", "true", "ai"):
+            return True, ""
+        if value.lower() in ("no", "n", "0", "off", "false", "none"):
+            return False, ""
+        return None, "AI ke liye yes ya no bhejo."
+    return None, "Unknown plan step. /cancel karke dobara try karo."
+
+
+def _plan_wizard_summary(plan: dict) -> str:
+    max_bots = "Unlimited" if plan_has_unlimited_credits(plan) else str(plan.get("max_bots", 1))
+    return (
+        f"✅ Plan saved successfully!\n\n"
+        f"🏷️ {plan.get('name', plan.get('id', 'Plan'))}\n"
+        f"🆔 ID: {plan.get('id')}\n"
+        f"💰 Price: {plan_price_label(plan)}\n"
+        f"⏳ Validity: {plan_duration_label(plan)}\n"
+        f"🤖 Bot limit: {max_bots}\n"
+        f"🧠 AI: {'ON' if plan.get('ai_autofix') else 'OFF'}"
+    )
+
+
+async def handle_plan_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """Consume one admin plan value and ask for the next one."""
+    state = context.user_data.get("plan_wizard")
+    if not isinstance(state, dict):
+        return False
+    user = update.effective_user
+    if user is None or not is_admin(user.id):
+        context.user_data.pop("plan_wizard", None)
+        return False
+
+    if str(text or "").strip().lower() in ("/cancel", "cancel", "/back", "back"):
+        context.user_data.pop("plan_wizard", None)
+        await safe_reply(update.message, "Plan wizard cancel kar diya gaya.", reply_markup=plan_admin_keyboard())
+        return True
+
+    mode = str(state.get("mode", "add"))
+    step = str(state.get("step", "id"))
+    parsed, error = _parse_plan_wizard_value(step, text)
+    if error:
+        await safe_reply(update.message, plan_wizard_prompt(state, error), reply_markup=admin_back_kb())
+        return True
+
+    values = state.setdefault("values", {})
+    if step == "id" and mode == "add":
+        if parsed in get_plans():
+            await safe_reply(update.message, plan_wizard_prompt(state, "Yeh Plan ID already exist karti hai. Nayi ID bhejo."), reply_markup=admin_back_kb())
+            return True
+    values[step] = parsed
+
+    steps = _PLAN_WIZARD_STEPS.get(mode, _PLAN_WIZARD_STEPS["add"])
+    position = steps.index(step)
+    if position < len(steps) - 1:
+        state["step"] = steps[position + 1]
+        await safe_reply(update.message, plan_wizard_prompt(state), reply_markup=admin_back_kb())
+        return True
+
+    plans = get_plans()
+    slug = values.get("id") if mode == "add" else str(state.get("slug", "")).lower()
+    if mode == "edit" and slug not in plans:
+        context.user_data.pop("plan_wizard", None)
+        await safe_reply(update.message, "Plan nahi mila. Plan Manager se dobara Edit dabao.", reply_markup=plan_admin_keyboard())
+        return True
+
+    old = plans.get(slug, {}) if isinstance(plans.get(slug), dict) else {}
+    plan = {
+        "id": slug,
+        "name": values.get("name", old.get("name", slug)),
+        "price_inr": values.get("price", old.get("price_inr")),
+        "duration_days": values.get("days", old.get("duration_days", 30)),
+        "max_bots": values.get("max_bots", old.get("max_bots", 1)),
+        "ai_autofix": bool(values.get("ai", old.get("ai_autofix", False))) if slug == "premium" else False,
+        "active": old.get("active", True) if mode == "edit" else True,
+    }
+    plans[slug] = plan
+    save_plans(plans)
+    context.user_data.pop("plan_wizard", None)
+    log_audit_action(f"{'Added' if mode == 'add' else 'Edited'} membership plan {slug}", user.id)
+    await safe_reply(update.message, _plan_wizard_summary(plan), reply_markup=plan_admin_keyboard())
+    return True
 
 
 def get_scheduled_announcements() -> list:
@@ -1127,7 +1269,7 @@ def admin_back_kb(with_main: bool = True) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([row])
 
 
-_TRANSIENT_EXACT = {"editing_env_bot", "dm_mode", "pending_action"}
+_TRANSIENT_EXACT = {"editing_env_bot", "dm_mode", "pending_action", "plan_wizard"}
 
 
 def pending_state_keys(context) -> list:
@@ -1238,12 +1380,12 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     trying to fake colors that Telegram does not allow bots to set.
     """
     keyboard = [
-        [InlineKeyboardButton("🚀 Host Bot", callback_data="menu_host")],
-        [InlineKeyboardButton("🤖 My Bots", callback_data="menu_mybots"), InlineKeyboardButton("📁 Files", callback_data="menu_files")],
-        [InlineKeyboardButton("📊 Dashboard", callback_data="menu_dashboard"), InlineKeyboardButton("💎 Premium Plans", callback_data="menu_premium")],
-        [InlineKeyboardButton("💾 Backup", callback_data="menu_backup"), InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings")],
-        [InlineKeyboardButton("👤 Account", callback_data="menu_account")],
-        [InlineKeyboardButton("📣 Channel ↗", url=OFFICIAL_CHANNEL_URL), InlineKeyboardButton("▶️ OWNER ↗", url="https://t.me/Rolax112")]
+        [InlineKeyboardButton("🚀 Host New Bot", callback_data="menu_host")],
+        [InlineKeyboardButton("🤖 My Bot Fleet", callback_data="menu_mybots"), InlineKeyboardButton("📁 File Manager", callback_data="menu_files")],
+        [InlineKeyboardButton("📊 Dashboard", callback_data="menu_dashboard"), InlineKeyboardButton("💎 Plans & Pricing", callback_data="menu_premium")],
+        [InlineKeyboardButton("💾 Backups", callback_data="menu_backup"), InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings")],
+        [InlineKeyboardButton("👤 My Account", callback_data="menu_account")],
+        [InlineKeyboardButton("📢 Official Channel ↗", url=OFFICIAL_CHANNEL_URL), InlineKeyboardButton("💬 Contact Admin ↗", url="https://t.me/Rolax112")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -1270,7 +1412,7 @@ def admin_panel_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("👆 User Clicks", callback_data="adm_user_clicks"), InlineKeyboardButton("✉️ DM User", callback_data="adm_dm_user")],
             [InlineKeyboardButton(f"⏰ Daily Reminder: {rem_status}", callback_data="adm_toggle_reminder")],
             [InlineKeyboardButton("➕ Add Credit", callback_data="adm_add_credit"), InlineKeyboardButton("➖ Remove Credit", callback_data="adm_rem_credit")],
-            [InlineKeyboardButton("💳 Manage Plans", callback_data="adm_plans")],
+            [InlineKeyboardButton("💳 Plan Studio", callback_data="adm_plans")],
             [InlineKeyboardButton("🎁 Set Referral", callback_data="adm_set_ref_reward"), InlineKeyboardButton("🎟️ Create Redeem", callback_data="adm_create_redeem")],
             [InlineKeyboardButton("📢 Instant Broadcast", callback_data="adm_broadcast"), InlineKeyboardButton("🖼️ Media Broadcast", callback_data="adm_broadcast_media")],
             [InlineKeyboardButton("⏰ Schedule Announce", callback_data="adm_schedule_announcement")],
@@ -1305,18 +1447,20 @@ def admin_panel_keyboard(user_id: int) -> InlineKeyboardMarkup:
 # ==================== HELPERS ====================
 
 def get_start_text(user_first_name: str, user_bot_count: int, max_bots: int, is_premium: bool, credits: float, expiry_str: str = "", plan_label: str = "Free Plan", unlimited_credits: bool = False) -> str:
-    # Keep the welcome section compact: the plan is included inside the
-    # Account Credits row, so the two account rows remain unchanged.
+    # Keep the account section compact: only Account Credits and Total Bot
+    # Host are shown there. Do not append the bot username to the welcome.
     credit_label = f"{plan_label} • Unlimited Credits" if unlimited_credits else f"{plan_label} • {round(credits, 2)} Credits"
     return (
-        f"✨ **EXCLUSIVE ROLAX HOSTING V2** ✨\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👋 Hello **{user_first_name}**, Welcome!\n\n"
-        f"⚡ Here you can host and manage your Python and Node.js bots 24/7 without interruption.\n\n"
+        f"✨ **ROLAX HOSTING** ✨\n"
+        f"╭━━━━━━━━━━━━━━━━━━━━╮\n"
+        f"┃ 👋 Welcome, **{user_first_name}**!\n"
+        f"┃ ⚡ Your 24/7 bot control center\n"
+        f"╰━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        f"🚀 Host Python and Node.js bots with a clean, simple dashboard.\n\n"
         f"💰 **Account Credits:** `{credit_label}`\n"
         f"🤖 **Total Bot Host:** `{user_bot_count}`\n\n"
-        f"👇 Select an option using the interactive buttons below:\n\n"
-        f"v{VERSION}" + ((" · @" + BOT_USERNAME) if BOT_USERNAME else "")
+        f"👇 Choose an action below to get started.\n\n"
+        f"🛡️ Fast • Secure • Always improving  |  v{VERSION}"
     )
 
 def register_user(user, referrer_id: Optional[str] = None) -> dict:
@@ -1801,20 +1945,27 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             if not item.get("active", True):
                 continue
             max_bots = "Unlimited bots" if plan_has_unlimited_credits(item) else f"{item.get('max_bots', 1)} bot slot(s)"
-            ai_text = " • Premium AI" if item.get("ai_autofix", False) else ""
-            plan_lines.append(f"• **{item.get('name', slug)}** — {plan_price_label(item)} / {plan_duration_label(item)}\n  {max_bots}{ai_text}")
-            keyboard.append([InlineKeyboardButton(f"📩 Buy {item.get('name', slug)}", url="https://t.me/Rolax112")])
+            ai_text = "🧠 Premium AI" if item.get("ai_autofix", False) else "🧠 Standard support"
+            plan_lines.append(
+                f"╭━━ {item.get('name', slug)}\n"
+                f"┃ 💰 {plan_price_label(item)}  •  ⏳ {plan_duration_label(item)}\n"
+                f"┃ 🤖 {max_bots}\n"
+                f"┃ {ai_text}\n"
+                "╰──────────────"
+            )
+            keyboard.append([InlineKeyboardButton(f"💳 Get {item.get('name', slug)}", url="https://t.me/Rolax112")])
         current_name = plan.get("name", "Basic Plan")
         text = (
-            "💎 **Membership Plans**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💎 ROLAX MEMBERSHIP\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ Pick the plan that fits your hosting needs.\n\n"
             + ("\n\n".join(plan_lines) or "Plans abhi admin set karega.")
             + "\n\n"
-            + f"Your current plan: {'✅ ' if is_prem else '🆓 '}{current_name}{expiry_text}\n\n"
-            + "Plan purchase/activation ke liye OWNER ko direct DM karein. Payment system unchanged hai."
+            + f"📌 Current plan: {'✅ ' if is_prem else '🆓 '}{current_name}{expiry_text}\n\n"
+            + "Activation ke liye direct admin ko message karein. Payment flow unchanged hai."
         )
-        keyboard.append([InlineKeyboardButton("▶️ Contact OWNER", url="https://t.me/Rolax112")])
-        keyboard.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_start")])
+        keyboard.append([InlineKeyboardButton("💬 DM @Rolax112 for Activation", url="https://t.me/Rolax112")])
+        keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu_start")])
         await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "menu_referral":
@@ -2436,12 +2587,12 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
             return
         clear_user_flow(context)
-        context.user_data["awaiting_plan_add"] = True
-        await safe_edit(query,
-            "➕ Add Membership Plan\n\n"
-            "Send: ID | NAME | PRICE_INR/contact | DAYS | MAX_BOTS/unlimited | AI 0/1\n"
-            "Example: basic2 | Basic 2 | 49 | 30 | 2 | 0",
-            reply_markup=admin_back_kb())
+        context.user_data["plan_wizard"] = {
+            "mode": "add",
+            "step": "id",
+            "values": {},
+        }
+        await safe_edit(query, plan_wizard_prompt(context.user_data["plan_wizard"]), reply_markup=admin_back_kb())
 
     elif data.startswith("adm_plan_edit_") and is_admin(user.id):
         if int(user.id) != int(ADMIN_ID):
@@ -2452,14 +2603,13 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await safe_answer(query, "Plan nahi mila.", show_alert=True)
             return
         clear_user_flow(context)
-        context.user_data[f"awaiting_plan_edit_{slug}"] = True
-        item = get_plans()[slug]
-        max_bots = "unlimited" if plan_has_unlimited_credits(item) else str(item.get("max_bots", 1))
-        await safe_edit(query,
-            f"✏️ Edit {item.get('name', slug)}\n\n"
-            "Send: NAME | PRICE_INR/contact | DAYS | MAX_BOTS/unlimited | AI 0/1\n"
-            f"Current: {item.get('name', slug)} | {plan_price_label(item)} | {item.get('duration_days', 30)} | {max_bots} | {1 if item.get('ai_autofix') else 0}",
-            reply_markup=admin_back_kb())
+        context.user_data["plan_wizard"] = {
+            "mode": "edit",
+            "slug": slug,
+            "step": "name",
+            "values": {},
+        }
+        await safe_edit(query, plan_wizard_prompt(context.user_data["plan_wizard"]), reply_markup=admin_back_kb())
 
     elif data.startswith("adm_plan_toggle_") and is_admin(user.id):
         if int(user.id) != int(ADMIN_ID):
@@ -2471,6 +2621,23 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             plans[slug]["active"] = not plans[slug].get("active", True)
             save_plans(plans)
             log_audit_action(f"Toggled membership plan {slug} to {'ON' if plans[slug]['active'] else 'OFF'}", user.id)
+        return "adm_plans"
+
+    elif data.startswith("adm_plan_remove_") and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        slug = data[len("adm_plan_remove_"):].strip().lower()
+        if slug in DEFAULT_PLAN_CATALOG:
+            await safe_answer(query, "Basic, Classic aur Premium built-in plans hain. Inhe Pause/Resume karo.", show_alert=True)
+            return "adm_plans"
+        plans = get_plans()
+        if slug in plans:
+            removed_name = plans[slug].get("name", slug)
+            del plans[slug]
+            save_plans(plans)
+            log_audit_action(f"Removed custom membership plan {slug}", user.id)
+            await safe_answer(query, f"Removed: {removed_name}", show_alert=True)
         return "adm_plans"
 
     elif data == "adm_restrict_user" and is_admin(user.id):
@@ -2910,7 +3077,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.info("Ignoring help command from a non-user Telegram update")
         return
     clear_user_flow(context)
-    text = HELP_TEXT + (("\n\n🤖 **Bot:** @" + BOT_USERNAME) if BOT_USERNAME else "")
+    text = HELP_TEXT
     await safe_reply(
         update.message,
         text,
@@ -3159,6 +3326,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await safe_reply(update.message, "⚠️ Your hosting account is restricted by the administrator.")
         return
 
+    # Plan Manager wizard: each answer is collected in its own message.
+    # This intentionally runs before the older one-line parser so the new
+    # mobile-friendly flow is the default for Add/Edit plan actions.
+    if is_admin(user.id) and "plan_wizard" in context.user_data:
+        if await handle_plan_wizard(update, context, text):
+            return
+
     if context.user_data.pop("expecting_redeem_code", False):
         codes = get_redeem_codes()
         users = get_users()
@@ -3272,46 +3446,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if is_admin(user.id):
+        # Migration for an older screen that may still be present in persisted
+        # Telegram user_data after an update. Continue it in the new wizard;
+        # never ask the owner for the old pipe-separated format again.
         if context.user_data.pop("awaiting_plan_add", False):
-            if int(user.id) != int(ADMIN_ID):
-                return
-            slug, plan, error = parse_plan_input(text)
-            if error:
-                await safe_reply(update.message, "❌ " + error)
-                return
-            plans = get_plans()
-            if slug in plans:
-                await safe_reply(update.message, "Ye plan ID already exist karti hai. Existing plan ke Edit button ka use karein.")
-                return
-            if slug != "premium":
-                plan["ai_autofix"] = False
-            plans[slug] = plan
-            save_plans(plans)
-            log_audit_action(f"Added membership plan {slug}", user.id)
-            await safe_reply(update.message, f"✅ Plan added: {plan.get('name')}\nPrice: {plan_price_label(plan)}\nValidity: {plan_duration_label(plan)}\nMax bots: {'Unlimited' if plan_has_unlimited_credits(plan) else plan.get('max_bots')}\nAI: {'ON' if plan.get('ai_autofix') else 'OFF'}", reply_markup=plan_admin_keyboard())
+            context.user_data["plan_wizard"] = {"mode": "add", "step": "id", "values": {}}
+            await handle_plan_wizard(update, context, text)
             return
 
         edit_plan_key = next((k for k in list(context.user_data) if str(k).startswith("awaiting_plan_edit_")), None)
         if edit_plan_key:
-            if int(user.id) != int(ADMIN_ID):
-                return
             slug = str(edit_plan_key).replace("awaiting_plan_edit_", "", 1).strip().lower()
             context.user_data.pop(edit_plan_key, None)
-            slug, plan, error = parse_plan_input(text, slug)
-            if error:
-                await safe_reply(update.message, "❌ " + error)
-                return
-            plans = get_plans()
-            if slug not in plans:
-                await safe_reply(update.message, "Plan nahi mila. Pehle Add Plan use karein.")
-                return
-            plan["active"] = plans[slug].get("active", True)
-            if slug != "premium":
-                plan["ai_autofix"] = False
-            plans[slug] = plan
-            save_plans(plans)
-            log_audit_action(f"Edited membership plan {slug}", user.id)
-            await safe_reply(update.message, f"✅ Plan updated: {plan.get('name')}\nPrice: {plan_price_label(plan)}\nValidity: {plan_duration_label(plan)}\nMax bots: {'Unlimited' if plan_has_unlimited_credits(plan) else plan.get('max_bots')}\nAI: {'ON' if plan.get('ai_autofix') else 'OFF'}", reply_markup=plan_admin_keyboard())
+            context.user_data["plan_wizard"] = {"mode": "edit", "slug": slug, "step": "name", "values": {}}
+            await handle_plan_wizard(update, context, text)
             return
 
         if context.user_data.pop("awaiting_dm_user", False):
