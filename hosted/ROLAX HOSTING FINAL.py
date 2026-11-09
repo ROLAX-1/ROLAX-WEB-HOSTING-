@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =====================================================================
-#  ROLAX HOSTING V2  -  v3.30   (SINGLE FILE BUILD)
+#  ROLAX HOSTING V2  -  v3.31   (SINGLE FILE BUILD)
 # ---------------------------------------------------------------------
 #  Chalane ka tarika:
 #       python3 ROLAX_HOSTING_FINAL.py
@@ -9,8 +9,9 @@
 #  - Config isi file ke andar hai (neeche CONFIG section).
 #  - OPTIONAL: isi folder me .env rakh do to wahan se BOT_TOKEN /
 #    ADMIN_ID / DATA_DIR / FORCE_JOIN_CHANNELS utha liye jayenge.
-#    AI error-review ke liye GROQ_API_KEY ya OPENAI_API_KEY bhi .env me
-#    rakha ja sakta hai. Provider key ke bina AI ko available nahi bataya jayega.
+#    AI error-review ke liye GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY
+#    ya ANTHROPIC_API_KEY .env me rakha ja sakta hai. Provider key ke bina
+#    AI ko available nahi bataya jayega.
 #    (Hosting panels ki env variables hamesha jeetati hain.)
 #  - python-telegram-bot + psutil pehli baar khud install ho jaate hain.
 #  - Check karne ke liye:  python3 ROLAX_HOSTING_FINAL.py --check
@@ -35,6 +36,9 @@ del _sys
 import os
 import sys
 import subprocess
+import base64
+import hashlib
+import hmac
 
 
 # ---------------------------------------------------------------------
@@ -90,7 +94,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.30"
+VERSION = "3.31"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -321,9 +325,19 @@ def get_config() -> dict:
         "default_ram_limit": 8192,
         "maintenance_mode": False,
         "referral_reward": 0.25,
-        "daily_reminder_active": True
+        "daily_reminder_active": True,
+        # AI provider/key settings are optional. The key is stored encrypted
+        # when it is entered from the Super Admin panel; environment variables
+        # remain the preferred production source.
+        "ai_provider": "",
+        "ai_api_key_enc": "",
+        "ai_api_key_updated_at": ""
     }
-    return load_json(CONFIG_FILE, default_cfg)
+    data = load_json(CONFIG_FILE, default_cfg)
+    if isinstance(data, dict):
+        for key, value in default_cfg.items():
+            data.setdefault(key, value)
+    return data
 
 def save_config(data: dict) -> None: save_json(CONFIG_FILE, data)
 
@@ -365,30 +379,144 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+AI_PROVIDER_META = {
+    "gemini": {
+        "name": "Google Gemini",
+        "env": "GEMINI_API_KEY",
+        "model_env": "GEMINI_MODEL",
+        "model": "gemini-3.8-flash",
+    },
+    "groq": {
+        "name": "Groq",
+        "env": "GROQ_API_KEY",
+        "model_env": "GROQ_MODEL",
+        "model": "llama-3.3-70b-versatile",
+    },
+    "openai": {
+        "name": "OpenAI",
+        "env": "OPENAI_API_KEY",
+        "model_env": "OPENAI_MODEL",
+        "model": "gpt-4o-mini",
+    },
+    "anthropic": {
+        "name": "Anthropic Claude",
+        "env": "ANTHROPIC_API_KEY",
+        "model_env": "ANTHROPIC_MODEL",
+        "model": "claude-3-5-haiku-latest",
+    },
+    # Custom means an OpenAI-compatible endpoint. The endpoint/model are read
+    # from CUSTOM_AI_BASE_URL/OPENAI_BASE_URL and CUSTOM_AI_MODEL/OPENAI_MODEL
+    # in the host environment.
+    "custom": {
+        "name": "Custom OpenAI-compatible",
+        "env": "CUSTOM_AI_API_KEY",
+        "model_env": "CUSTOM_AI_MODEL",
+        "model": "gpt-4o-mini",
+    },
+}
+
+
+def _ai_crypto_secret() -> bytes:
+    material = str(os.environ.get("AI_KEY_ENCRYPTION_SECRET", "")).strip()
+    if not material:
+        material = f"{BOT_TOKEN}:{ADMIN_ID}:rolax-ai-key-v1"
+    return hashlib.sha256(material.encode("utf-8", errors="ignore")).digest()
+
+
+def _ai_keystream(length: int, nonce: bytes) -> bytes:
+    secret = _ai_crypto_secret()
+    chunks = []
+    counter = 0
+    while sum(len(chunk) for chunk in chunks) < length:
+        chunks.append(hashlib.sha256(secret + nonce + counter.to_bytes(4, "big")).digest())
+        counter += 1
+    return b"".join(chunks)[:length]
+
+
+def encrypt_ai_key(value: str) -> str:
+    """Encrypt a provider key before placing it in config.json.
+
+    Production environment variables are still preferred. This local encrypted
+    fallback lets the Telegram panel work on a persistent VPS without writing a
+    raw API key to the JSON database.
+    """
+    raw = str(value or "").strip().encode("utf-8")
+    nonce = os.urandom(16)
+    cipher = bytes(a ^ b for a, b in zip(raw, _ai_keystream(len(raw), nonce)))
+    tag = hmac.new(_ai_crypto_secret(), nonce + cipher, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(nonce + tag + cipher).decode("ascii")
+
+
+def decrypt_ai_key(value: str) -> str:
+    try:
+        blob = base64.urlsafe_b64decode(str(value or "").encode("ascii"))
+        if len(blob) < 48:
+            return ""
+        nonce, tag, cipher = blob[:16], blob[16:48], blob[48:]
+        expected = hmac.new(_ai_crypto_secret(), nonce + cipher, hashlib.sha256).digest()
+        if not hmac.compare_digest(tag, expected):
+            return ""
+        raw = bytes(a ^ b for a, b in zip(cipher, _ai_keystream(len(cipher), nonce)))
+        return raw.decode("utf-8")
+    except Exception:
+        return ""
+
+
+def _provider_config(provider: str, key: str, source: str = "") -> Optional[dict]:
+    slug = str(provider or "").strip().lower()
+    meta = AI_PROVIDER_META.get(slug)
+    if not meta or not str(key or "").strip():
+        return None
+    key = str(key).strip()
+    model = str(os.environ.get(meta["model_env"], "")).strip() or meta["model"]
+    if slug == "gemini":
+        return {"kind": "gemini", "name": meta["name"], "key": key, "model": model, "source": source}
+    if slug == "anthropic":
+        return {"kind": "anthropic", "name": meta["name"], "key": key, "model": model, "source": source}
+    if slug == "custom":
+        url = str(os.environ.get("CUSTOM_AI_BASE_URL", "")).strip() or str(os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1/chat/completions")).strip()
+        return {"kind": "openai", "name": meta["name"], "url": url, "key": key, "model": model, "source": source}
+    url = "https://api.groq.com/openai/v1/chat/completions" if slug == "groq" else "https://api.openai.com/v1/chat/completions"
+    return {"kind": "openai", "name": meta["name"], "url": url, "key": key, "model": model, "source": source}
+
+
+def _saved_ai_provider_config() -> Optional[dict]:
+    data = get_config()
+    provider = str(data.get("ai_provider", "")).strip().lower()
+    key = decrypt_ai_key(data.get("ai_api_key_enc", ""))
+    return _provider_config(provider, key, "admin panel")
+
+
 def ai_provider_config() -> Optional[dict]:
     """Return a real provider configuration, or None when AI is unavailable.
 
     The Telegram bot never treats a local heuristic, restart, or dependency
     installer as AI. A provider key is required before an AI review can be
-    offered to a Premium user.
+    offered to a Premium user. A key saved by Super Admin takes precedence over
+    environment defaults; environment variables are the durable production
+    source and support Gemini, Groq, OpenAI, Anthropic and custom compatible
+    endpoints.
     """
-    groq = str(os.environ.get("GROQ_API_KEY", "")).strip()
-    if groq:
-        return {
-            "name": "Groq",
-            "url": "https://api.groq.com/openai/v1/chat/completions",
-            "key": groq,
-            "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        }
-    openai = str(os.environ.get("OPENAI_API_KEY", "")).strip()
-    if openai:
-        return {
-            "name": "OpenAI",
-            "url": "https://api.openai.com/v1/chat/completions",
-            "key": openai,
-            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-        }
+    saved = _saved_ai_provider_config()
+    if saved:
+        return saved
+    for slug, meta in AI_PROVIDER_META.items():
+        env_key = str(os.environ.get(meta["env"], "")).strip()
+        config = _provider_config(slug, env_key, "environment")
+        if config:
+            return config
+    # GOOGLE_API_KEY is a common Gemini alias.
+    google_key = str(os.environ.get("GOOGLE_API_KEY", "")).strip()
+    if google_key:
+        return _provider_config("gemini", google_key, "environment")
     return None
+
+
+def ai_provider_label(provider: Optional[dict]) -> str:
+    if not provider:
+        return "Not configured"
+    source = "panel" if provider.get("source") == "admin panel" else "environment"
+    return f"{provider.get('name', 'AI')} ({source})"
 
 
 def plan_ai_enabled(plan: Optional[dict]) -> bool:
@@ -558,7 +686,7 @@ def plan_admin_text() -> str:
         "Bot tumse har value alag message mein poochega — kisi pipe/format ki zaroorat nahi.",
         "AI access ka matlab: code/error log ka provider-backed AI review aur safe suggestions.",
         "AI setting yes/no se control hoti hai, lekin effective AI sirf Premium plan par hai.",
-        "Provider key (GROQ_API_KEY ya OPENAI_API_KEY) ke bina AI available nahi bataya jayega.",
+        "Provider key (Gemini/Groq/OpenAI/Anthropic ya custom compatible) ke bina AI available nahi bataya jayega.",
         "Maximum bots field se har plan ka bot limit number ya unlimited set karo.",
         "Custom plans ko Remove kiya ja sakta hai; Basic/Classic/Premium ko Pause/Resume karo.",
     ])
@@ -644,7 +772,7 @@ def plan_wizard_prompt(state: dict, error: str = "") -> str:
         if slug and slug != "premium":
             lines.append("⚠️ AI eligibility safety rule: effective AI sirf Premium plan par ON hota hai; is plan par Yes bhi OFF save hoga.")
         if ai_provider_config() is None:
-            lines.append("ℹ️ Abhi GROQ_API_KEY/OPENAI_API_KEY configured nahi hai, isliye AI available nahi dikhaya jayega.")
+            lines.append("ℹ️ Abhi Gemini/Groq/OpenAI/Anthropic provider key configured nahi hai, isliye AI available nahi dikhaya jayega.")
     lines.extend(["", "Har step ka jawab alag message mein bhejo.", "Cancel karne ke liye /cancel bhejo."])
     return "\n".join(lines)
 
@@ -1192,7 +1320,7 @@ def ai_access_status(user_id: int, users: Optional[dict] = None) -> tuple[bool, 
         return False, "AI error-fix review sirf Premium plan ke liye enabled hai.", None
     provider = ai_provider_config()
     if provider is None:
-        return False, "AI provider configured nahi hai. GROQ_API_KEY ya OPENAI_API_KEY add karo.", None
+        return False, "AI provider configured nahi hai. Gemini, Groq, OpenAI, Anthropic ya custom compatible API key add karo.", None
     return True, f"AI review available via {provider['name']}.", provider
 
 
@@ -1206,38 +1334,57 @@ def _read_text_tail(path: str, limit: int = 12000) -> str:
 
 
 def _call_ai_error_review_sync(provider: dict, prompt: str) -> Optional[dict]:
-    """Call Groq/OpenAI without adding another runtime dependency."""
+    """Call a configured provider without adding another runtime dependency."""
     try:
+        import urllib.parse
         import urllib.request
-        request = urllib.request.Request(
-            provider["url"],
-            data=json.dumps({
-                "model": provider["model"],
-                "temperature": 0.1,
+        system = (
+            "You are ROLAX AI error reviewer. Return ONLY valid JSON with keys "
+            "summary, root_cause, suggestions, safe_next_steps, confidence. "
+            "Be suggestion-first: do not claim you changed code, installed packages, "
+            "restarted anything, or guaranteed a fix. Never return secrets. "
+            "Use concise Hinglish/English."
+        )
+        kind = provider.get("kind", "openai")
+        if kind == "gemini":
+            url = "https://generativelanguage.googleapis.com/v1beta/models/" + urllib.parse.quote(provider["model"], safe="") + ":generateContent"
+            body = {
+                "contents": [{"role": "user", "parts": [{"text": system + "\n\n" + prompt}]}],
+                "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
+            }
+            headers = {"content-type": "application/json", "x-goog-api-key": provider["key"]}
+        elif kind == "anthropic":
+            url = "https://api.anthropic.com/v1/messages"
+            body = {
+                "model": provider["model"], "max_tokens": 1200, "temperature": 0.1,
+                "system": system,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            headers = {
+                "content-type": "application/json",
+                "x-api-key": provider["key"],
+                "anthropic-version": "2023-06-01",
+            }
+        else:
+            url = provider["url"]
+            body = {
+                "model": provider["model"], "temperature": 0.1,
                 "response_format": {"type": "json_object"},
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are ROLAX AI error reviewer. Return ONLY valid JSON with keys "
-                            "summary, root_cause, suggestions, safe_next_steps, confidence. "
-                            "Be suggestion-first: do not claim you changed code, installed packages, "
-                            "restarted anything, or guaranteed a fix. Never return secrets. "
-                            "Use concise Hinglish/English."
-                        ),
-                    },
+                    {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
-            }).encode("utf-8"),
-            headers={
-                "content-type": "application/json",
-                "authorization": f"Bearer {provider['key']}",
-            },
-            method="POST",
-        )
+            }
+            headers = {"content-type": "application/json", "authorization": f"Bearer {provider['key']}"}
+        request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
         with urllib.request.urlopen(request, timeout=25) as response:
             payload = json.loads(response.read().decode("utf-8", errors="ignore"))
-        content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if kind == "gemini":
+            content = payload.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        elif kind == "anthropic":
+            content = payload.get("content", [{}])[0].get("text", "")
+        else:
+            content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
         if isinstance(content, dict):
             return content
         parsed = json.loads(str(content))
@@ -1651,6 +1798,40 @@ def host_options_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def ai_settings_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton("🌈 Set Gemini", callback_data="adm_ai_set_gemini"), InlineKeyboardButton("⚡ Set Groq", callback_data="adm_ai_set_groq")],
+        [InlineKeyboardButton("🟢 Set OpenAI", callback_data="adm_ai_set_openai"), InlineKeyboardButton("🟣 Set Anthropic", callback_data="adm_ai_set_anthropic")],
+        [InlineKeyboardButton("🛠️ Set Custom Compatible", callback_data="adm_ai_set_custom")],
+        [InlineKeyboardButton("🧹 Clear Panel Key", callback_data="adm_ai_clear")],
+        [InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def ai_settings_text() -> str:
+    config = get_config()
+    provider = ai_provider_config()
+    saved_provider = str(config.get("ai_provider", "")).strip().lower()
+    saved_key = bool(config.get("ai_api_key_enc"))
+    if provider:
+        active = f"✅ Active: {ai_provider_label(provider)}"
+    else:
+        active = "⚪ Active: No provider configured"
+    panel_state = f"\n🔐 Panel key: {AI_PROVIDER_META.get(saved_provider, {}).get('name', saved_provider) if saved_key else 'Not set'}"
+    return (
+        "🧠 AI PROVIDER & API KEY\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"{active}{panel_state}\n\n"
+        "Yahan se provider choose karke API key alag message me bhejo.\n"
+        "Key masked/encrypted store hogi; chat me dobara show nahi hogi.\n"
+        "Gemini, Groq, OpenAI, Anthropic aur OpenAI-compatible custom provider supported hain.\n"
+        "Custom endpoint ke liye CUSTOM_AI_BASE_URL/OPENAI_BASE_URL env me set karo.\n\n"
+        "⚠️ Production me Vercel environment key sabse durable source hai.\n"
+        "AI Error Review sirf Premium + AI yes + valid provider key par chalega."
+    )
+
+
 def admin_panel_keyboard(user_id: int) -> InlineKeyboardMarkup:
     config = get_config()
     bot_status = config.get("bot_status", "ON")
@@ -1666,6 +1847,7 @@ def admin_panel_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(f"⏰ Daily Reminder: {rem_status}", callback_data="adm_toggle_reminder")],
             [InlineKeyboardButton("➕ Add Credit", callback_data="adm_add_credit"), InlineKeyboardButton("➖ Remove Credit", callback_data="adm_rem_credit")],
             [InlineKeyboardButton("💳 Plan Studio", callback_data="adm_plans"), InlineKeyboardButton("🎁 Assign Plan", callback_data="adm_assign_plan")],
+            [InlineKeyboardButton("🧠 AI Provider / API Key", callback_data="adm_ai_settings")],
             [InlineKeyboardButton("🎁 Set Referral", callback_data="adm_set_ref_reward"), InlineKeyboardButton("🎟️ Create Redeem", callback_data="adm_create_redeem")],
             [InlineKeyboardButton("📢 Instant Broadcast", callback_data="adm_broadcast"), InlineKeyboardButton("🖼️ Media Broadcast", callback_data="adm_broadcast_media")],
             [InlineKeyboardButton("⏰ Schedule Announce", callback_data="adm_schedule_announcement")],
@@ -2932,6 +3114,51 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
         context.user_data["awaiting_rem_prem"] = True
         await safe_edit(query, "❌ Remove Premium VIP\nSend User Chat ID below:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")]]))
 
+    elif data == "adm_ai_settings" and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        clear_user_flow(context)
+        await safe_edit(query, ai_settings_text(), reply_markup=ai_settings_keyboard())
+
+    elif data.startswith("adm_ai_set_") and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        provider = data[len("adm_ai_set_"):].strip().lower()
+        if provider not in AI_PROVIDER_META:
+            await safe_answer(query, "Unknown AI provider.", show_alert=True)
+            return
+        clear_user_flow(context)
+        context.user_data["awaiting_ai_key_provider"] = provider
+        provider_name = AI_PROVIDER_META[provider]["name"]
+        await safe_edit(
+            query,
+            f"🧠 Set {provider_name} API Key\n\n"
+            "Ab sirf API key ek alag message me bhejo. Key ko dobara screen par show nahi kiya jayega.\n"
+            "Cancel: /cancel",
+            reply_markup=admin_back_kb(),
+        )
+
+    elif data == "adm_ai_clear" and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        clear_user_flow(context)
+        config = get_config()
+        config["ai_provider"] = ""
+        config["ai_api_key_enc"] = ""
+        config["ai_api_key_updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        save_config(config)
+        log_audit_action("Cleared panel-saved AI provider key", user.id)
+        await safe_edit(
+            query,
+            "🧹 Panel-saved AI key clear kar di gayi.\n\n"
+            "Agar Vercel environment me GEMINI_API_KEY/GROQ_API_KEY/OPENAI_API_KEY set hai, "
+            "to woh production fallback ke roop me active rahegi.",
+            reply_markup=ai_settings_keyboard(),
+        )
+
     elif data == "adm_plans" and is_admin(user.id):
         if int(user.id) != int(ADMIN_ID):
             await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
@@ -3802,6 +4029,44 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if is_admin(user.id):
+        ai_key_provider = context.user_data.pop("awaiting_ai_key_provider", None)
+        if ai_key_provider:
+            if int(user.id) != int(ADMIN_ID):
+                return
+            key_value = str(text or "").strip()
+            if key_value.lower() in ("/cancel", "cancel", "/back", "back"):
+                await safe_reply(update.message, "AI key setup cancel kar diya gaya.", reply_markup=admin_panel_keyboard(user.id))
+                return
+            if len(key_value) < 10 or len(key_value) > 500:
+                context.user_data["awaiting_ai_key_provider"] = ai_key_provider
+                await safe_reply(update.message, "API key format chhota/galat lag raha hai. Sirf valid key bhejo ya /cancel.", reply_markup=admin_back_kb())
+                return
+            # Do not leave the credential visible in the Telegram chat history
+            # when the Bot API permits deleting the admin's incoming message.
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+            config = get_config()
+            config["ai_provider"] = ai_key_provider
+            config["ai_api_key_enc"] = encrypt_ai_key(key_value)
+            config["ai_api_key_updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_config(config)
+            try:
+                os.chmod(CONFIG_FILE, 0o600)
+            except OSError:
+                pass
+            log_audit_action(f"Updated panel AI provider key for {ai_key_provider}", user.id)
+            provider = ai_provider_config()
+            await safe_reply(
+                update.message,
+                f"✅ {AI_PROVIDER_META[ai_key_provider]['name']} key securely save ho gayi.\n\n"
+                f"Active provider: {ai_provider_label(provider)}\n"
+                "Key ko Telegram screen par show nahi kiya jayega. Premium + AI yes ke baad AI Error Review use kar sakte ho.",
+                reply_markup=ai_settings_keyboard(),
+            )
+            return
+
         if context.user_data.pop("awaiting_plan_user", False):
             target_uid = resolve_user_id(text)
             if not target_uid:

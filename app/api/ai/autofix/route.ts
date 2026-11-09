@@ -12,7 +12,7 @@ type Body = { files?: InFile[]; entryFile?: string; checks?: any[]; stack?: stri
 type Patch = { file: string; reason: string; code: string };
 type AiResult = {
   ok: boolean;
-  engine: "groq" | "openai" | "local";
+  engine: "gemini" | "groq" | "openai" | "anthropic" | "local";
   summary: string;
   fixes: Patch[];
   notes: string[];
@@ -96,9 +96,12 @@ function localFixes(files: InFile[], checks: any[]): AiResult {
 }
 
 async function callLLM(files: InFile[], checks: any[], stack?: string): Promise<AiResult | null> {
+  const gemini = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   const groq = process.env.GROQ_API_KEY;
   const openai = process.env.OPENAI_API_KEY;
-  if (!groq && !openai) return null;
+  const anthropic = process.env.ANTHROPIC_API_KEY;
+  const custom = process.env.CUSTOM_AI_API_KEY;
+  if (!gemini && !groq && !openai && !anthropic && !custom) return null;
 
   const payload = files.slice(0, 4).map(f => `### FILE: ${f.name}\n${f.content.slice(0, 6000)}`).join("\n\n");
   const userMsg = `Stack: ${stack || "unknown"}
@@ -106,26 +109,55 @@ Detected problems: ${JSON.stringify((checks || []).filter((c: any) => c.level !=
 
 ${payload}`;
 
-  const url = groq ? "https://api.groq.com/openai/v1/chat/completions" : "https://api.openai.com/v1/chat/completions";
-  const key = groq || openai;
-  const model = groq ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
+  const engine = gemini ? "gemini" : groq ? "groq" : openai ? "openai" : anthropic ? "anthropic" : "openai";
+  const model = gemini
+    ? (process.env.GEMINI_MODEL || "gemini-3.8-flash")
+    : groq
+      ? (process.env.GROQ_MODEL || "llama-3.3-70b-versatile")
+      : openai
+        ? (process.env.OPENAI_MODEL || "gpt-4o-mini")
+        : anthropic
+          ? (process.env.ANTHROPIC_MODEL || "claude-3-5-haiku-latest")
+          : (process.env.CUSTOM_AI_MODEL || "gpt-4o-mini");
 
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model,
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: SYSTEM },
-          { role: "user", content: userMsg },
-        ],
-      }),
-    });
+    let url = "";
+    let headers: Record<string, string> = { "content-type": "application/json" };
+    let body: any;
+    if (engine === "gemini") {
+      url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+      headers = { ...headers, "x-goog-api-key": gemini || "" };
+      body = {
+        contents: [{ role: "user", parts: [{ text: SYSTEM + "\n\n" + userMsg }] }],
+        generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+      };
+    } else if (engine === "anthropic") {
+      url = "https://api.anthropic.com/v1/messages";
+      headers = { ...headers, "x-api-key": anthropic || "", "anthropic-version": "2023-06-01" };
+      body = {
+        model, max_tokens: 5000, temperature: 0.1, system: SYSTEM,
+        messages: [{ role: "user", content: userMsg }],
+      };
+    } else {
+      url = groq
+        ? "https://api.groq.com/openai/v1/chat/completions"
+        : openai
+          ? "https://api.openai.com/v1/chat/completions"
+          : (process.env.CUSTOM_AI_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1/chat/completions");
+      headers = { ...headers, authorization: `Bearer ${groq || openai || custom || ""}` };
+      body = {
+        model, temperature: 0.1, response_format: { type: "json_object" },
+        messages: [{ role: "system", content: SYSTEM }, { role: "user", content: userMsg }],
+      };
+    }
+    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    if (!res.ok) return null;
     const j = await res.json();
-    const text = j?.choices?.[0]?.message?.content || "";
+    const text = engine === "gemini"
+      ? j?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+      : engine === "anthropic"
+        ? j?.content?.[0]?.text || ""
+        : j?.choices?.[0]?.message?.content || "";
     const parsed = JSON.parse(text);
     const fixes: Patch[] = Array.isArray(parsed.fixes)
       ? parsed.fixes
@@ -134,7 +166,7 @@ ${payload}`;
       : [];
     return {
       ok: fixes.length > 0,
-      engine: groq ? "groq" : "openai",
+      engine,
       summary: String(parsed.summary || (fixes.length ? "AI ne code repair kiya" : "AI ko koi issue nahi mila")),
       fixes,
       notes: Array.isArray(parsed.notes) ? parsed.notes.map(String) : [],
@@ -154,12 +186,16 @@ export async function POST(req: NextRequest) {
   // Local heuristics are useful diagnostics, but they are not AI. Never label
   // or expose the Auto-Fix action as available until a real provider key is
   // configured and the provider returns a response.
-  const providerConfigured = !!(process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY);
+  const providerConfigured = !!(
+    process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY ||
+    process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY ||
+    process.env.CUSTOM_AI_API_KEY
+  );
   if (!providerConfigured) {
     return NextResponse.json({
       ok: false,
       aiAvailable: false,
-      error: "AI provider configured nahi hai. GROQ_API_KEY ya OPENAI_API_KEY add karne ke baad AI Auto-Fix available hoga.",
+      error: "AI provider configured nahi hai. Gemini, Groq, OpenAI, Anthropic ya custom compatible API key add karne ke baad AI Auto-Fix available hoga.",
       notes: ["Local checks abhi bhi errors dikha sakte hain, lekin unhe AI fix nahi kaha jayega."],
     }, { status: 503 });
   }
@@ -225,7 +261,11 @@ export async function POST(req: NextRequest) {
     notes: result.notes,
     supportFiles: support.map(s => ({ file: s.file, reason: s.reason })),
     guard: { ok: guard.ok, rejected: guard.rejected, details: guard.details },
-    aiAvailable: !!(process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY),
+    aiAvailable: !!(
+      process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY ||
+      process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY ||
+      process.env.CUSTOM_AI_API_KEY
+    ),
     at: new Date().toISOString(),
   });
 }
