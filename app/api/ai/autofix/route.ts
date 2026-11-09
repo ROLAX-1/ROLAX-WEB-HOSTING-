@@ -129,7 +129,12 @@ ${payload}`;
       headers = { ...headers, "x-goog-api-key": gemini || "" };
       body = {
         contents: [{ role: "user", parts: [{ text: SYSTEM + "\n\n" + userMsg }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 6000, responseMimeType: "application/json" },
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 6000,
+          responseMimeType: "application/json",
+          thinkingConfig: { thinkingLevel: "LOW" },
+        },
       };
     } else if (engine === "anthropic") {
       url = "https://api.anthropic.com/v1/messages";

@@ -1350,7 +1350,12 @@ def _call_ai_error_review_sync(provider: dict, prompt: str) -> Optional[dict]:
             url = "https://generativelanguage.googleapis.com/v1beta/models/" + urllib.parse.quote(provider["model"], safe="") + ":generateContent"
             body = {
                 "contents": [{"role": "user", "parts": [{"text": system + "\n\n" + prompt}]}],
-                "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1200, "responseMimeType": "application/json"},
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "maxOutputTokens": 1200,
+                    "responseMimeType": "application/json",
+                    "thinkingConfig": {"thinkingLevel": "LOW"},
+                },
             }
             headers = {"content-type": "application/json", "x-goog-api-key": provider["key"]}
         elif kind == "anthropic":
