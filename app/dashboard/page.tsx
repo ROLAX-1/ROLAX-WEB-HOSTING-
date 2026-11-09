@@ -52,7 +52,7 @@ export default function DashboardPage() {
   const [backups, setBackups] = useState<Record<string, { at: string; size: string }[]>>({});
   const [manualToken, setManualToken] = useState("");
   const [fixToken, setFixToken] = useState("");
-  const [aiFix, setAiFix] = useState<{ engine: string; summary: string; notes: string[]; fixes: any[]; supportFiles?: any[]; guard?: any } | null>(null);
+  const [aiFix, setAiFix] = useState<{ engine: string; summary: string; notes: string[]; fixes: any[]; supportFiles?: any[]; guard?: any; applied?: boolean } | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [logsSite, setLogsSite] = useState<any>(null);
 
@@ -118,6 +118,32 @@ export default function DashboardPage() {
   const canAiFix = featureOn("ai_autofix");
   const can24x7 = featureOn("bot_24x7");
   const canAiReview = featureOn("ai_review");
+
+  const applyAiSuggestions = async () => {
+    if (!aiFix?.fixes?.length || !reportSite) return;
+    setDeploying(true);
+    try {
+      const nextFiles = (reportSite.src || []).map((f: any) => {
+        const patch = aiFix.fixes.find((x: any) => x.file === f.name || x.file.endsWith(f.name));
+        return patch ? { name: f.name, content: patch.code } : f;
+      });
+      aiFix.fixes.forEach((x: any) => {
+        if (!nextFiles.some((f: any) => f.name === x.file)) nextFiles.push({ name: x.file, content: x.code });
+      });
+      const reReport = await runDeployChecks({ files: nextFiles, binaryCount: 0, totalBytes: 0 });
+      const fields = reportToSiteFields(reReport);
+      setWebsites(websites.map(w => w.id === reportSite.id ? { ...w, ...fields, stack: reReport.stack, src: nextFiles.map((f: any) => ({ name: f.name, content: f.content.slice(0, 4000) })) } as any : w));
+      setLastReport(reReport);
+      setReportSite({ ...reportSite, ...fields, src: nextFiles });
+      setAiFix({ ...aiFix, applied: true });
+      toast(`AI suggestions apply kiye — ${reReport.ok ? "verification pass ✅" : "kuch errors bache hain"}`, reReport.ok ? "success" : "info");
+    } catch (e: any) {
+      toast("AI suggestions apply nahi hue: " + (e?.message || "unknown error"), "error");
+    } finally {
+      setDeploying(false);
+    }
+  };
+
   const rate = settings?.usdToInr || 88;
   const inr = (usd: number) => Math.round(usd * rate);
   const priceLabel = (usd: number) => (usd === 0 ? "Free" : `$${usd} / ₹${inr(usd)}`);
@@ -968,9 +994,9 @@ export default function DashboardPage() {
             <div className={`mt-4 rounded-2xl p-4 border ${canAiFix ? "bg-[#6C5CE7]/10 border-[#6C5CE7]/40" : "bg-[#111] border-[#222]"}`}>
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <p className="text-xs font-semibold text-white">🤖 AI Auto-Fix {canAiFix ? "" : "— Ultra Pro only"}</p>
+                  <p className="text-xs font-semibold text-white">🤖 AI Error-Fix Review {canAiFix ? "" : "— Ultra Pro only"}</p>
                   <p className="text-[10px] text-[#888] mt-0.5">
-                    {canAiFix ? "AI tumhara code padhkar errors khud fix karega, phir dobara verify hoga." : `Ye feature sirf Ultra Pro plan me hai. Tumhara plan: ${status.planName}.`}
+                    {canAiFix ? "Provider-backed AI error suggestions dega; code bina tumhari approval ke change nahi hoga." : `Ye feature sirf Ultra Pro plan me hai. Tumhara plan: ${status.planName}.`}
                   </p>
                 </div>
                 <button
@@ -988,18 +1014,7 @@ export default function DashboardPage() {
                       if (!j.ok) { toast(j.error || "AI fix fail hua", "error"); setAiBusy(false); return; }
                       setAiFix(j);
                       if (!j.fixes?.length) { toast("AI ko koi fixable error nahi mila", "info"); setAiBusy(false); return; }
-                      // patches apply karo
-                      const nextFiles = (reportSite.src || []).map((f: any) => {
-                        const patch = j.fixes.find((x: any) => x.file === f.name || x.file.endsWith(f.name));
-                        return patch ? { name: f.name, content: patch.code } : f;
-                      });
-                      j.fixes.forEach((x: any) => { if (!nextFiles.some((f: any) => f.name === x.file)) nextFiles.push({ name: x.file, content: x.code }); });
-                      const reReport = await runDeployChecks({ files: nextFiles, binaryCount: 0, totalBytes: 0 });
-                      const fields = reportToSiteFields(reReport);
-                      setWebsites(websites.map(w => w.id === reportSite.id ? { ...w, ...fields, stack: reReport.stack, src: nextFiles.map((f: any) => ({ name: f.name, content: f.content.slice(0, 4000) })) } as any : w));
-                      setLastReport(reReport);
-                      setReportSite({ ...reportSite, ...fields, src: nextFiles });
-                      toast(`AI (${j.engine}) ne ${j.fixes.length} file fix ki — ${reReport.ok ? "ab sab pass ✅" : "kuch errors bache hain"}`, reReport.ok ? "success" : "info");
+                      toast(`AI (${j.engine}) ne ${j.fixes.length} suggestion di. Review karke Apply Suggestions dabao.`, "info");
                     } catch (e: any) {
                       toast("AI fix error: " + e.message, "error");
                     }
@@ -1007,7 +1022,7 @@ export default function DashboardPage() {
                   }}
                   className={`px-4 py-2 rounded-full text-xs font-medium shrink-0 ${canAiFix ? "bg-white text-black" : "bg-[#222] text-[#666] cursor-not-allowed"}`}
                 >
-                  {aiBusy ? "AI soch raha hai..." : canAiFix ? "Fix with AI ✨" : "🔒 Locked"}
+                  {aiBusy ? "AI soch raha hai..." : canAiFix ? "Review with AI ✨" : "🔒 Locked"}
                 </button>
               </div>
               {aiFix && (
@@ -1023,6 +1038,15 @@ export default function DashboardPage() {
                     <p className="text-[10px] text-[#00ff88] mt-1">📄 Generated: {aiFix.supportFiles.map((s: any) => s.file).join(", ")}</p>
                   ) : null}
                   {aiFix.notes?.map((n, i) => <p key={i} className="text-[10px] text-[#666] mt-1">💡 {n}</p>)}
+                  {!!aiFix.fixes?.length && (
+                    <button
+                      onClick={applyAiSuggestions}
+                      disabled={deploying || aiFix.applied}
+                      className="mt-3 px-3 py-2 rounded-full bg-white text-black text-[11px] font-medium disabled:opacity-50"
+                    >
+                      {aiFix.applied ? "✅ Suggestions applied" : "Apply verified suggestions"}
+                    </button>
+                  )}
                 </div>
               )}
             </div>

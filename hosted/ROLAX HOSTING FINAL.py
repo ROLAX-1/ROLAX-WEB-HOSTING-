@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =====================================================================
-#  ROLAX HOSTING V2  -  v3.26   (SINGLE FILE BUILD)
+#  ROLAX HOSTING V2  -  v3.30   (SINGLE FILE BUILD)
 # ---------------------------------------------------------------------
 #  Chalane ka tarika:
 #       python3 ROLAX_HOSTING_FINAL.py
@@ -9,6 +9,8 @@
 #  - Config isi file ke andar hai (neeche CONFIG section).
 #  - OPTIONAL: isi folder me .env rakh do to wahan se BOT_TOKEN /
 #    ADMIN_ID / DATA_DIR / FORCE_JOIN_CHANNELS utha liye jayenge.
+#    AI error-review ke liye GROQ_API_KEY ya OPENAI_API_KEY bhi .env me
+#    rakha ja sakta hai. Provider key ke bina AI ko available nahi bataya jayega.
 #    (Hosting panels ki env variables hamesha jeetati hain.)
 #  - python-telegram-bot + psutil pehli baar khud install ho jaate hain.
 #  - Check karne ke liye:  python3 ROLAX_HOSTING_FINAL.py --check
@@ -88,7 +90,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.29"
+VERSION = "3.30"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -345,19 +347,79 @@ DEFAULT_PLAN_CATALOG = {
 }
 
 
+_TRUE_WORDS = {"yes", "y", "1", "on", "true", "ai", "haan", "ha"}
+_FALSE_WORDS = {"no", "n", "0", "off", "false", "none", "nahi", "nahin"}
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    """Parse saved/admin values without the Python bool('no') trap."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in _TRUE_WORDS:
+        return True
+    if text in _FALSE_WORDS or text == "":
+        return False
+    return default
+
+
+def ai_provider_config() -> Optional[dict]:
+    """Return a real provider configuration, or None when AI is unavailable.
+
+    The Telegram bot never treats a local heuristic, restart, or dependency
+    installer as AI. A provider key is required before an AI review can be
+    offered to a Premium user.
+    """
+    groq = str(os.environ.get("GROQ_API_KEY", "")).strip()
+    if groq:
+        return {
+            "name": "Groq",
+            "url": "https://api.groq.com/openai/v1/chat/completions",
+            "key": groq,
+            "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        }
+    openai = str(os.environ.get("OPENAI_API_KEY", "")).strip()
+    if openai:
+        return {
+            "name": "OpenAI",
+            "url": "https://api.openai.com/v1/chat/completions",
+            "key": openai,
+            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        }
+    return None
+
+
+def plan_ai_enabled(plan: Optional[dict]) -> bool:
+    """AI error-fix eligibility is intentionally Premium-only."""
+    return bool(isinstance(plan, dict) and str(plan.get("id", "")).lower() == "premium" and _coerce_bool(plan.get("ai_autofix"), False))
+
+
+def plan_ai_label(plan: Optional[dict], include_provider: bool = True) -> str:
+    """Honest AI label used in admin/user screens."""
+    if not plan_ai_enabled(plan):
+        return "🧠 AI error-fix: OFF"
+    if include_provider and ai_provider_config() is None:
+        return "🧠 AI error-fix: ON • provider key missing"
+    return "🧠 AI error-fix: ON"
+
+
 def save_plans(data: dict) -> None:
     save_json(PLANS_FILE, data)
 
 
 def get_plans() -> dict:
-    """Return the editable Basic/Classic/Premium catalog.
+    """Return the editable Basic/Classic/Premium plus custom catalog.
 
-    Existing custom plans are preserved. Missing built-in plans are restored so
-    an old database can be upgraded without deleting the admin's changes.
+    Every plan keeps a numeric bot limit, and the AI field is normalized from
+    both JSON booleans and admin text. The Premium-only rule is applied here so
+    an old/manual plans.json cannot accidentally unlock AI on another plan.
     """
     raw = load_json(PLANS_FILE, {})
     plans = raw if isinstance(raw, dict) else {}
     changed = False
+
     for slug, default in DEFAULT_PLAN_CATALOG.items():
         if not isinstance(plans.get(slug), dict):
             plans[slug] = dict(default)
@@ -368,19 +430,53 @@ def get_plans() -> dict:
             if key not in item:
                 item[key] = value
                 changed = True
+
+    for raw_slug, item in list(plans.items()):
+        if not isinstance(item, dict):
+            plans.pop(raw_slug, None)
+            changed = True
+            continue
+        slug = str(raw_slug).strip().lower()
+        if not slug:
+            plans.pop(raw_slug, None)
+            changed = True
+            continue
+        if slug != raw_slug:
+            plans[slug] = item
+            plans.pop(raw_slug, None)
+            changed = True
+        default = DEFAULT_PLAN_CATALOG.get(slug, {})
         item["id"] = slug
+
+        old_days = item.get("duration_days", default.get("duration_days", 30))
         try:
-            item["duration_days"] = max(1, min(3650, int(item.get("duration_days", 30))))
+            days = max(1, min(3650, int(old_days)))
         except (TypeError, ValueError):
-            item["duration_days"] = default["duration_days"]
+            days = int(default.get("duration_days", 30))
+        if item.get("duration_days") != days:
+            item["duration_days"] = days
             changed = True
+
+        old_limit = item.get("max_bots", default.get("max_bots", 1))
         try:
-            item["max_bots"] = 999999 if str(item.get("max_bots", 1)).lower() in ("unlimited", "infinity", "infinite") else max(1, int(item.get("max_bots", 1)))
+            limit = 999999 if str(old_limit).strip().lower() in ("unlimited", "infinity", "infinite") else max(1, int(old_limit))
         except (TypeError, ValueError):
-            item["max_bots"] = default["max_bots"]
+            limit = int(default.get("max_bots", 1))
+        if item.get("max_bots") != limit:
+            item["max_bots"] = limit
             changed = True
-        item["active"] = bool(item.get("active", True))
-        item["ai_autofix"] = bool(item.get("ai_autofix", False))
+
+        active = _coerce_bool(item.get("active", True), True)
+        if item.get("active") != active:
+            item["active"] = active
+            changed = True
+
+        requested_ai = _coerce_bool(item.get("ai_autofix", False), False)
+        effective_ai = requested_ai if slug == "premium" else False
+        if item.get("ai_autofix") != effective_ai:
+            item["ai_autofix"] = effective_ai
+            changed = True
+
     if changed or not os.path.exists(PLANS_FILE):
         save_plans(plans)
     return plans
@@ -446,21 +542,24 @@ def plan_admin_text() -> str:
         "",
     ]
     for slug, plan in get_plans().items():
-        ai = "🧠 AI ON" if plan.get("ai_autofix") else "🧠 AI OFF"
+        ai = plan_ai_label(plan)
         state = "🟢 ACTIVE" if plan.get("active", True) else "⚪ PAUSED"
         max_bots = "Unlimited" if plan_has_unlimited_credits(plan) else str(plan.get("max_bots", 1))
         lines.append(
             f"╭━━ {plan.get('name', slug)}\n"
             f"┃ ID: {slug} • {state}\n"
             f"┃ 💰 {plan_price_label(plan)}  •  ⏳ {plan_duration_label(plan)}\n"
-            f"┃ 🤖 {max_bots} bot(s)  •  {ai}\n"
+            f"┃ 🤖 Bot limit: {max_bots}  •  {ai}\n"
             "╰──────────────"
         )
     lines.extend([
         "",
         "✅ Add ya Edit button dabao.",
         "Bot tumse har value alag message mein poochega — kisi pipe/format ki zaroorat nahi.",
-        "AI access safety ke liye sirf Premium par active save hota hai.",
+        "AI access ka matlab: code/error log ka provider-backed AI review aur safe suggestions.",
+        "AI setting yes/no se control hoti hai, lekin effective AI sirf Premium plan par hai.",
+        "Provider key (GROQ_API_KEY ya OPENAI_API_KEY) ke bina AI available nahi bataya jayega.",
+        "Maximum bots field se har plan ka bot limit number ya unlimited set karo.",
         "Custom plans ko Remove kiya ja sakta hai; Basic/Classic/Premium ko Pause/Resume karo.",
     ])
     return "\n".join(lines)
@@ -488,9 +587,10 @@ def assign_plan_keyboard(target_uid: str) -> InlineKeyboardMarkup:
         if not plan.get("active", True):
             continue
         max_bots = "∞ bots" if plan_has_unlimited_credits(plan) else f"{plan.get('max_bots', 1)} bots"
+        ai_short = "🧠 AI" if plan_ai_enabled(plan) else "🧠 No AI"
         rows.append([
             InlineKeyboardButton(
-                f"🎁 {plan.get('name', slug)} • {plan_price_label(plan)} • {max_bots}",
+                f"🎁 {plan.get('name', slug)} • {max_bots} • {ai_short}",
                 callback_data=f"adm_assign_plan:{slug}:{target_uid}",
             )
         ])
@@ -538,7 +638,13 @@ def plan_wizard_prompt(state: dict, error: str = "") -> str:
     elif step == "max_bots":
         lines.append("Maximum bots bhejo, jaise 3, ya unlimited likho.")
     elif step == "ai":
-        lines.append("AI access ke liye yes ya no bhejo. Safety ke liye AI sirf Premium plan par save hoga.")
+        slug = str(state.get("slug") or state.get("values", {}).get("id") or "").strip().lower()
+        lines.append("AI access = bot/code error ke liye provider-backed AI review aur safe suggestions.")
+        lines.append("Yes ya no bhejo. Yes ka matlab AI suggestion access; AI khud bina tumhari approval code apply nahi karega.")
+        if slug and slug != "premium":
+            lines.append("⚠️ AI eligibility safety rule: effective AI sirf Premium plan par ON hota hai; is plan par Yes bhi OFF save hoga.")
+        if ai_provider_config() is None:
+            lines.append("ℹ️ Abhi GROQ_API_KEY/OPENAI_API_KEY configured nahi hai, isliye AI available nahi dikhaya jayega.")
     lines.extend(["", "Har step ka jawab alag message mein bhejo.", "Cancel karne ke liye /cancel bhejo."])
     return "\n".join(lines)
 
@@ -583,16 +689,18 @@ def _parse_plan_wizard_value(step: str, text: str):
         except (TypeError, ValueError):
             return None, "Maximum bots positive number ya unlimited hona chahiye."
     if step == "ai":
-        if value.lower() in ("yes", "y", "1", "on", "true", "ai"):
+        lowered = value.lower()
+        if lowered in _TRUE_WORDS:
             return True, ""
-        if value.lower() in ("no", "n", "0", "off", "false", "none"):
+        if lowered in _FALSE_WORDS:
             return False, ""
-        return None, "AI ke liye yes ya no bhejo."
+        return None, "AI access ke liye sirf yes ya no bhejo (haan/nahi bhi chalega)."
     return None, "Unknown plan step. /cancel karke dobara try karo."
 
 
-def _plan_wizard_summary(plan: dict) -> str:
+def _plan_wizard_summary(plan: dict, ai_notice: str = "") -> str:
     max_bots = "Unlimited" if plan_has_unlimited_credits(plan) else str(plan.get("max_bots", 1))
+    notice = f"\n\n⚠️ {ai_notice}" if ai_notice else ""
     return (
         f"✅ Plan saved successfully!\n\n"
         f"🏷️ {plan.get('name', plan.get('id', 'Plan'))}\n"
@@ -600,7 +708,9 @@ def _plan_wizard_summary(plan: dict) -> str:
         f"💰 Price: {plan_price_label(plan)}\n"
         f"⏳ Validity: {plan_duration_label(plan)}\n"
         f"🤖 Bot limit: {max_bots}\n"
-        f"🧠 AI: {'ON' if plan.get('ai_autofix') else 'OFF'}"
+        f"{plan_ai_label(plan)}\n"
+        f"ℹ️ AI mode: suggestions only; provider key required"
+        f"{notice}"
     )
 
 
@@ -648,20 +758,25 @@ async def handle_plan_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return True
 
     old = plans.get(slug, {}) if isinstance(plans.get(slug), dict) else {}
+    requested_ai = _coerce_bool(values.get("ai", old.get("ai_autofix", False)), False)
+    effective_ai = requested_ai if slug == "premium" else False
     plan = {
         "id": slug,
         "name": values.get("name", old.get("name", slug)),
         "price_inr": values.get("price", old.get("price_inr")),
         "duration_days": values.get("days", old.get("duration_days", 30)),
         "max_bots": values.get("max_bots", old.get("max_bots", 1)),
-        "ai_autofix": bool(values.get("ai", old.get("ai_autofix", False))) if slug == "premium" else False,
+        "ai_autofix": effective_ai,
         "active": old.get("active", True) if mode == "edit" else True,
     }
     plans[slug] = plan
     save_plans(plans)
     context.user_data.pop("plan_wizard", None)
     log_audit_action(f"{'Added' if mode == 'add' else 'Edited'} membership plan {slug}", user.id)
-    await safe_reply(update.message, _plan_wizard_summary(plan), reply_markup=plan_admin_keyboard())
+    ai_notice = ""
+    if requested_ai and slug != "premium":
+        ai_notice = "AI access Premium-only hai, isliye is non-Premium plan par AI OFF rakha gaya."
+    await safe_reply(update.message, _plan_wizard_summary(plan, ai_notice), reply_markup=plan_admin_keyboard())
     return True
 
 
@@ -1067,6 +1182,127 @@ def get_bot_resource_usage(bot_id: str) -> tuple:
             except Exception:
                 pass
     return 0.0, 0.0
+
+
+def ai_access_status(user_id: int, users: Optional[dict] = None) -> tuple[bool, str, Optional[dict]]:
+    """Return (allowed, human reason, provider) for the real AI reviewer."""
+    users = users if isinstance(users, dict) else get_users()
+    plan = get_user_plan(user_id, users)
+    if not plan_ai_enabled(plan):
+        return False, "AI error-fix review sirf Premium plan ke liye enabled hai.", None
+    provider = ai_provider_config()
+    if provider is None:
+        return False, "AI provider configured nahi hai. GROQ_API_KEY ya OPENAI_API_KEY add karo.", None
+    return True, f"AI review available via {provider['name']}.", provider
+
+
+def _read_text_tail(path: str, limit: int = 12000) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            data = fh.read()
+        return data[-limit:]
+    except Exception:
+        return "(unavailable)"
+
+
+def _call_ai_error_review_sync(provider: dict, prompt: str) -> Optional[dict]:
+    """Call Groq/OpenAI without adding another runtime dependency."""
+    try:
+        import urllib.request
+        request = urllib.request.Request(
+            provider["url"],
+            data=json.dumps({
+                "model": provider["model"],
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are ROLAX AI error reviewer. Return ONLY valid JSON with keys "
+                            "summary, root_cause, suggestions, safe_next_steps, confidence. "
+                            "Be suggestion-first: do not claim you changed code, installed packages, "
+                            "restarted anything, or guaranteed a fix. Never return secrets. "
+                            "Use concise Hinglish/English."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            }).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "authorization": f"Bearer {provider['key']}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=25) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="ignore"))
+        content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if isinstance(content, dict):
+            return content
+        parsed = json.loads(str(content))
+        return parsed if isinstance(parsed, dict) else None
+    except Exception as exc:
+        logger.warning("AI error review provider request failed: %s", type(exc).__name__)
+        return None
+
+
+async def generate_ai_error_review(user_id: int, bot_id: str, binfo: dict) -> str:
+    """Generate a provider-backed, suggestion-only error review.
+
+    This never edits a hosted file or restarts a process. The existing
+    deterministic crash/dependency guardian remains separate and keeps its old
+    behaviour; this action is explicitly the Premium AI review path.
+    """
+    allowed, reason, provider = ai_access_status(user_id)
+    if not allowed or provider is None:
+        return f"🔒 AI Error Review unavailable\n\n{reason}"
+
+    log_path = os.path.join(LOGS_DIR, f"bot_{bot_id}.log")
+    source_path = str(binfo.get("path") or "")
+    logs = _read_text_tail(log_path, 12000) if os.path.exists(log_path) else "(no runtime log found)"
+    source = _read_text_tail(source_path, 16000) if source_path and os.path.exists(source_path) else "(source file unavailable)"
+    prompt = (
+        f"Bot ID: {bot_id}\n"
+        f"Runtime: {binfo.get('runtime', 'python')}\n"
+        f"Status: {binfo.get('status', 'unknown')}\n\n"
+        "Review the runtime log and source excerpt. Identify likely causes and "
+        "give safe manual next steps. Do not write a replacement file and do not "
+        "say that the error is fixed.\n\n"
+        f"RUNTIME LOG (tail):\n{logs}\n\n"
+        f"SOURCE EXCERPT (tail):\n{source}"
+    )
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, _call_ai_error_review_sync, provider, prompt)
+    if not result:
+        return "⚠️ AI Error Review failed\n\nProvider ne response nahi diya. Logs unchanged hain; baad mein dobara try karo."
+
+    summary = str(result.get("summary") or "No clear summary returned.")
+    root = str(result.get("root_cause") or "Cause uncertain; logs ko manually verify karo.")
+    suggestions = result.get("suggestions") if isinstance(result.get("suggestions"), list) else []
+    next_steps = result.get("safe_next_steps") if isinstance(result.get("safe_next_steps"), list) else []
+    confidence = str(result.get("confidence") or "unknown")
+    lines = [
+        "🧠 AI ERROR REVIEW (SUGGESTIONS ONLY)",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"Bot: #{bot_id} • Provider: {provider['name']}",
+        f"\nSummary: {summary}",
+        f"\nLikely cause: {root}",
+        "\nSuggestions:",
+    ]
+    lines.extend(f"• {str(item)}" for item in suggestions[:6] if str(item).strip())
+    if not suggestions:
+        lines.append("• No specific suggestion returned; inspect the latest log lines.")
+    lines.append("\nSafe next steps:")
+    lines.extend(f"• {str(item)}" for item in next_steps[:6] if str(item).strip())
+    if not next_steps:
+        lines.append("• Review the suggestion, then apply changes manually and restart if needed.")
+    lines.extend([
+        f"\nConfidence: {confidence}",
+        "⚠️ AI ne koi file change, install, ya restart nahi kiya. Result ko verify karke hi action lo.",
+    ])
+    return _telegram_text("\n".join(lines))
+
 
 async def auto_fix_guardian_task(app: Application):
     while True:
@@ -1981,7 +2217,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             if not item.get("active", True):
                 continue
             max_bots = "Unlimited bots" if plan_has_unlimited_credits(item) else f"{item.get('max_bots', 1)} bot slot(s)"
-            ai_text = "🧠 Premium AI" if item.get("ai_autofix", False) else "🧠 Standard support"
+            ai_text = plan_ai_label(item)
             plan_lines.append(
                 f"╭━━ {item.get('name', slug)}\n"
                 f"┃ 💰 {plan_price_label(item)}  •  ⏳ {plan_duration_label(item)}\n"
@@ -2114,6 +2350,9 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             uptime_str = f"{hours}h {mins}m {secs}s" if hours else f"{mins}m {secs}s"
 
         autofix_state = "ON 🟢" if binfo.get("autofix", True) else "OFF 🔴"
+        plan = get_user_plan(user.id, users)
+        ai_allowed, _ai_reason, _ai_provider = ai_access_status(user.id, users)
+        ai_state = "ON 🟢" if ai_allowed else "OFF 🔴"
 
         text = (
             f"⚡ Application Control Terminal\n"
@@ -2125,24 +2364,29 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             f"Runtime Engine: {binfo.get('runtime', 'python')}\n"
             f"Vector Source: {binfo.get('source', 'upload')}\n"
             f"Deployment Date: {binfo.get('deployed', 'N/A')}\n\n"
+            "🛠️ Auto-Fixer = crash restart/dependency helper (existing engine).\n"
+            "🧠 AI Error Review = Premium provider-backed suggestions only.\n\n"
             f"Select management tool below:"
         )
 
         keyboard = [
             [InlineKeyboardButton("🔄 Restart Instance", callback_data=f"bot_act_restart_{bot_id}"), InlineKeyboardButton("⏹️ Terminate", callback_data=f"bot_act_stop_{bot_id}")],
             [InlineKeyboardButton("🔑 Environment Variables (.env)", callback_data=f"bot_act_env_{bot_id}"), InlineKeyboardButton("📜 Live Stdout Logs", callback_data=f"bot_act_logs_{bot_id}")],
-            [InlineKeyboardButton("📊 Telemetry Stats", callback_data=f"bot_act_stats_{bot_id}"), InlineKeyboardButton(f"🤖 Auto-Fixer: {autofix_state}", callback_data=f"bot_act_autofix_{bot_id}")],
-            [InlineKeyboardButton("📁 Project Files", callback_data=f"bot_act_files_{bot_id}"), InlineKeyboardButton("💾 Backup Source", callback_data="menu_backup")],
-            [InlineKeyboardButton("🗑️ Purge & Delete", callback_data=f"bot_act_delete_{bot_id}")],
+            [InlineKeyboardButton("📊 Telemetry Stats", callback_data=f"bot_act_stats_{bot_id}"), InlineKeyboardButton(f"🛠️ Auto-Fixer: {autofix_state}", callback_data=f"bot_act_autofix_{bot_id}")],
+            [InlineKeyboardButton(f"🧠 AI Error Review: {ai_state}", callback_data=f"bot_act_ai_review_{bot_id}"), InlineKeyboardButton("📁 Project Files", callback_data=f"bot_act_files_{bot_id}")],
+            [InlineKeyboardButton("💾 Backup Source", callback_data="menu_backup"), InlineKeyboardButton("🗑️ Purge & Delete", callback_data=f"bot_act_delete_{bot_id}")],
             [InlineKeyboardButton("🔙 Back to Fleet", callback_data="menu_mybots")]
         ]
 
         await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("bot_act_"):
-        parts = data.split("_")
-        action = parts[2]
-        bot_id = parts[3]
+        action_payload = data[len("bot_act_"):]
+        if action_payload.startswith("ai_review_"):
+            action = "ai_review"
+            bot_id = action_payload[len("ai_review_"):]
+        else:
+            action, _, bot_id = action_payload.partition("_")
         bots = get_bots()
         binfo = bots.get(bot_id)
 
@@ -2210,6 +2454,16 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             state_str = "ENABLED 🟢" if binfo["autofix"] else "DISABLED 🔴"
             await safe_answer(query, f"Auto-Fix guardian set to {state_str}", show_alert=True)
             return f"bot_control_{bot_id}"
+
+        elif action == "ai_review":
+            await safe_answer(query, "AI error review chal raha hai…", show_alert=False)
+            review = await generate_ai_error_review(user.id, bot_id, binfo)
+            log_session_action(user.id, user.username or "N/A", f"Requested AI error review for Bot #{bot_id}")
+            await safe_edit(
+                query,
+                review,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Instance", callback_data=f"bot_control_{bot_id}")]]),
+            )
 
         elif action == "files":
             bot_dir = os.path.dirname(binfo["path"])
@@ -2630,6 +2884,7 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
         plan_name = assigned_plan.get("name", slug)
         duration = int(assigned_plan.get("duration_days", 30))
+        bot_limit = "Unlimited" if plan_has_unlimited_credits(assigned_plan) else str(assigned_plan.get("max_bots", 1))
         log_audit_action(f"Assigned {slug} plan to User {target_uid} for {duration} days", user.id)
         await safe_edit(
             query,
@@ -2637,7 +2892,9 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"👤 User: {target_uid}\n"
             f"🎁 Plan: {plan_name}\n"
-            f"⏳ Validity: {duration} days\n\n"
+            f"⏳ Validity: {duration} days\n"
+            f"🤖 Bot limit: {bot_limit}\n"
+            f"{plan_ai_label(assigned_plan)}\n\n"
             "User ko notification bhejne ki koshish ki gayi hai.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎁 Assign Another Plan", callback_data="adm_assign_plan")],

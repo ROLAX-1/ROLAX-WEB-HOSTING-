@@ -151,12 +151,33 @@ export async function POST(req: NextRequest) {
   const files = (body.files || []).filter(f => f && typeof f.content === "string").slice(0, 8);
   if (!files.length) return NextResponse.json({ ok: false, error: "No files provided" }, { status: 400 });
 
-  const ai = await callLLM(files, body.checks || [], body.stack);
-  const fallback = localFixes(files, body.checks || []);
-  const result: AiResult = ai && ai.ok ? ai : fallback;
+  // Local heuristics are useful diagnostics, but they are not AI. Never label
+  // or expose the Auto-Fix action as available until a real provider key is
+  // configured and the provider returns a response.
+  const providerConfigured = !!(process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY);
+  if (!providerConfigured) {
+    return NextResponse.json({
+      ok: false,
+      aiAvailable: false,
+      error: "AI provider configured nahi hai. GROQ_API_KEY ya OPENAI_API_KEY add karne ke baad AI Auto-Fix available hoga.",
+      notes: ["Local checks abhi bhi errors dikha sakte hain, lekin unhe AI fix nahi kaha jayega."],
+    }, { status: 503 });
+  }
 
-  // AI ne fix diya to bhi local engine se validate/merge karo (100% safety)
-  if (ai && ai.ok) {
+  const ai = await callLLM(files, body.checks || [], body.stack);
+  if (!ai) {
+    return NextResponse.json({
+      ok: false,
+      aiAvailable: true,
+      error: "AI provider ne response nahi diya. Code ko change nahi kiya gaya; baad mein dobara try karo.",
+    }, { status: 502 });
+  }
+  const fallback = localFixes(files, body.checks || []);
+  const result: AiResult = ai;
+
+  // Provider-backed AI fix ko deterministic local checks ke saath merge karo.
+  // Feature guard neeche user-facing commands/replies ko protect karta hai.
+  if (ai.ok) {
     const merged = [...ai.fixes];
     fallback.fixes.forEach(lf => { if (!merged.some(m => m.file === lf.file)) merged.push(lf); });
     result.fixes = merged;
