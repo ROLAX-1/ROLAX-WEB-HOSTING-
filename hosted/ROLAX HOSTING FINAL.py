@@ -88,7 +88,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.28"
+VERSION = "3.29"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -477,6 +477,23 @@ def plan_admin_keyboard() -> InlineKeyboardMarkup:
         if slug not in DEFAULT_PLAN_CATALOG:
             rows.append([InlineKeyboardButton(f"🗑️ Remove {plan.get('name', slug)}", callback_data=f"adm_plan_remove_{slug}")])
     rows.append([InlineKeyboardButton("➕ Create New Plan", callback_data="adm_plan_add")])
+    rows.append([InlineKeyboardButton("⬅️ Admin Dashboard", callback_data="adm_back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def assign_plan_keyboard(target_uid: str) -> InlineKeyboardMarkup:
+    """Plan picker shown after the admin enters the recipient."""
+    rows = []
+    for slug, plan in get_plans().items():
+        if not plan.get("active", True):
+            continue
+        max_bots = "∞ bots" if plan_has_unlimited_credits(plan) else f"{plan.get('max_bots', 1)} bots"
+        rows.append([
+            InlineKeyboardButton(
+                f"🎁 {plan.get('name', slug)} • {plan_price_label(plan)} • {max_bots}",
+                callback_data=f"adm_assign_plan:{slug}:{target_uid}",
+            )
+        ])
     rows.append([InlineKeyboardButton("⬅️ Admin Dashboard", callback_data="adm_back")])
     return InlineKeyboardMarkup(rows)
 
@@ -1380,11 +1397,11 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     trying to fake colors that Telegram does not allow bots to set.
     """
     keyboard = [
-        [InlineKeyboardButton("🚀 Host New Bot", callback_data="menu_host")],
-        [InlineKeyboardButton("🤖 My Bot Fleet", callback_data="menu_mybots"), InlineKeyboardButton("📁 File Manager", callback_data="menu_files")],
-        [InlineKeyboardButton("📊 Dashboard", callback_data="menu_dashboard"), InlineKeyboardButton("💎 Plans & Pricing", callback_data="menu_premium")],
-        [InlineKeyboardButton("💾 Backups", callback_data="menu_backup"), InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings")],
-        [InlineKeyboardButton("👤 My Account", callback_data="menu_account")],
+        [InlineKeyboardButton("🟣 🚀 Host New Bot", callback_data="menu_host")],
+        [InlineKeyboardButton("🔵 🤖 My Bot Fleet", callback_data="menu_mybots"), InlineKeyboardButton("🟢 📁 File Manager", callback_data="menu_files")],
+        [InlineKeyboardButton("🟡 📊 Dashboard", callback_data="menu_dashboard"), InlineKeyboardButton("🟪 💎 Plans & Pricing", callback_data="menu_premium")],
+        [InlineKeyboardButton("🟠 💾 Backups", callback_data="menu_backup"), InlineKeyboardButton("⚙️ Settings", callback_data="menu_settings")],
+        [InlineKeyboardButton("⚪ 👤 My Account", callback_data="menu_account")],
         [InlineKeyboardButton("📢 Official Channel ↗", url=OFFICIAL_CHANNEL_URL), InlineKeyboardButton("💬 Contact Admin ↗", url="https://t.me/Rolax112")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -1412,7 +1429,7 @@ def admin_panel_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("👆 User Clicks", callback_data="adm_user_clicks"), InlineKeyboardButton("✉️ DM User", callback_data="adm_dm_user")],
             [InlineKeyboardButton(f"⏰ Daily Reminder: {rem_status}", callback_data="adm_toggle_reminder")],
             [InlineKeyboardButton("➕ Add Credit", callback_data="adm_add_credit"), InlineKeyboardButton("➖ Remove Credit", callback_data="adm_rem_credit")],
-            [InlineKeyboardButton("💳 Plan Studio", callback_data="adm_plans")],
+            [InlineKeyboardButton("💳 Plan Studio", callback_data="adm_plans"), InlineKeyboardButton("🎁 Assign Plan", callback_data="adm_assign_plan")],
             [InlineKeyboardButton("🎁 Set Referral", callback_data="adm_set_ref_reward"), InlineKeyboardButton("🎟️ Create Redeem", callback_data="adm_create_redeem")],
             [InlineKeyboardButton("📢 Instant Broadcast", callback_data="adm_broadcast"), InlineKeyboardButton("🖼️ Media Broadcast", callback_data="adm_broadcast_media")],
             [InlineKeyboardButton("⏰ Schedule Announce", callback_data="adm_schedule_announcement")],
@@ -1546,48 +1563,67 @@ def resolve_user_id(raw_value: str, users: Optional[dict] = None) -> Optional[st
     return None
 
 
-def grant_premium(target: str, days: int) -> tuple[Optional[str], str]:
-    """Grant premium to an ID/@username, including a user who has not used /start.
+def _ensure_assignable_user(users: dict, target_uid: str) -> dict:
+    """Create a minimal record when an admin assigns a plan before /start."""
+    users.setdefault(target_uid, {
+        "username": "N/A",
+        "name": "N/A",
+        "joined": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "banned": False,
+        "restricted": False,
+        "premium": False,
+        "plan_id": "basic",
+        "plan_expiry": None,
+        "premium_expiry": None,
+        "crash_alerts": True,
+        "autofix": True,
+        "referred_by": None,
+        "credits": 1.0,
+    })
+    return users[target_uid]
 
-    Returning a message instead of raising keeps both the command and the
-    button flow user-visible when an admin enters a bad value.
+
+def grant_plan(target: str, plan_slug: str, days: Optional[int] = None) -> tuple[Optional[str], Optional[dict], str]:
+    """Assign any active catalog plan to a user from the admin panel.
+
+    The plan's configured duration is used by default, so the admin only has
+    to choose the person and then tap Basic, Classic, Premium, or a custom
+    plan. A numeric Telegram ID also works before that person opens the bot.
     """
-    if int(days) <= 0 or int(days) > 3650:
-        return None, "Days 1 se 3650 ke beech hone chahiye."
     users = get_users()
     target_uid = resolve_user_id(target, users)
     raw = str(target or "").strip()
     if not target_uid and raw.lstrip("-").isdigit() and int(raw) > 0:
-        # A valid Telegram ID may not have opened the bot yet. Store the grant
-        # now; it will still be present when that user sends /start later.
         target_uid = str(int(raw))
-        users[target_uid] = {
-            "username": "N/A",
-            "name": "N/A",
-            "joined": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "banned": False,
-            "restricted": False,
-            "premium": False,
-            "plan_id": "basic",
-            "plan_expiry": None,
-            "premium_expiry": None,
-            "crash_alerts": True,
-            "autofix": True,
-            "referred_by": None,
-            "credits": 1.0,
-        }
     if not target_uid:
-        return None, "User ID ya saved @username nahi mila. Numeric Telegram Chat ID use karo."
+        return None, None, "User ID ya saved @username nahi mila. Numeric Telegram Chat ID use karo."
+
+    slug = str(plan_slug or "").strip().lower()
     plans = get_plans()
-    if "premium" not in plans:
-        return None, "Premium plan catalog me available nahi hai."
-    expiry_timestamp = time.time() + (int(days) * 86400)
-    users.setdefault(target_uid, {})["premium"] = True
-    users[target_uid]["plan_id"] = "premium"
-    users[target_uid]["plan_expiry"] = expiry_timestamp
-    users[target_uid]["premium_expiry"] = expiry_timestamp
+    plan = plans.get(slug)
+    if not isinstance(plan, dict) or not plan.get("active", True):
+        return None, None, "Yeh plan available nahi hai ya paused hai."
+    try:
+        duration = int(days if days is not None else plan.get("duration_days", 30))
+    except (TypeError, ValueError):
+        duration = 30
+    if duration < 1 or duration > 3650:
+        return None, None, "Plan duration 1 se 3650 days ke beech honi chahiye."
+
+    user_info = _ensure_assignable_user(users, target_uid)
+    expiry_timestamp = time.time() + (duration * 86400)
+    user_info["plan_id"] = slug
+    user_info["plan_expiry"] = expiry_timestamp
+    user_info["premium"] = slug == "premium"
+    user_info["premium_expiry"] = expiry_timestamp if slug == "premium" else None
     save_users(users)
-    return target_uid, ""
+    return target_uid, dict(plan, duration_days=duration), ""
+
+
+def grant_premium(target: str, days: int) -> tuple[Optional[str], str]:
+    """Backward-compatible Premium grant used by the existing command flow."""
+    target_uid, _plan, error = grant_plan(target, "premium", days)
+    return target_uid, error
 
 # ==================== UPDATE SAFETY ====================
 
@@ -2552,11 +2588,74 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 [InlineKeyboardButton("🚫 Ban User", callback_data="adm_ban"), InlineKeyboardButton("✅ Unban User", callback_data="adm_unban")],
                 [InlineKeyboardButton("🔒 Restrict User", callback_data="adm_restrict_user"), InlineKeyboardButton("🔓 Unrestrict User", callback_data="adm_unrestrict_user")],
                 [InlineKeyboardButton("🛑 Stop Any Bot", callback_data="adm_stop_any_bot"), InlineKeyboardButton("🗑️ Delete Any Bot", callback_data="adm_del_any_bot")],
-                [InlineKeyboardButton("👤 View Profile", callback_data="adm_view_user"), InlineKeyboardButton("💎 Grant Premium", callback_data="adm_give_premium")],
+                [InlineKeyboardButton("👤 View Profile", callback_data="adm_view_user"), InlineKeyboardButton("🎁 Assign Plan", callback_data="adm_assign_plan")],
                 [InlineKeyboardButton("❌ Remove Premium", callback_data="adm_rem_premium"), InlineKeyboardButton("📋 Users List", callback_data="adm_users_list")],
                 [InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_back")]
             ])
         )
+
+    elif data == "adm_assign_plan" and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        clear_user_flow(context)
+        context.user_data["awaiting_plan_user"] = True
+        await safe_edit(
+            query,
+            "🎁 ASSIGN MEMBERSHIP PLAN\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Step 1/2 • Recipient\n\n"
+            "User ka numeric Chat ID ya saved @username alag message mein bhejo.\n"
+            "Example: 8472327599 ya @username\n\n"
+            "Step 2 mein Basic, Classic, Premium ya custom plan ka button milega.",
+            reply_markup=admin_back_kb(),
+        )
+
+    elif data.startswith("adm_assign_plan:") and is_admin(user.id):
+        if int(user.id) != int(ADMIN_ID):
+            await safe_answer(query, "Restricted to Super Owner.", show_alert=True)
+            return
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            await safe_answer(query, "Invalid plan assignment request.", show_alert=True)
+            return
+        _prefix, slug, target_uid = parts
+        plans = get_plans()
+        if slug not in plans or not plans[slug].get("active", True):
+            await safe_answer(query, "Plan unavailable or paused.", show_alert=True)
+            return
+        target_uid, assigned_plan, error = grant_plan(target_uid, slug)
+        if error:
+            await safe_answer(query, error, show_alert=True)
+            return
+        plan_name = assigned_plan.get("name", slug)
+        duration = int(assigned_plan.get("duration_days", 30))
+        log_audit_action(f"Assigned {slug} plan to User {target_uid} for {duration} days", user.id)
+        await safe_edit(
+            query,
+            f"✅ PLAN ASSIGNED\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 User: {target_uid}\n"
+            f"🎁 Plan: {plan_name}\n"
+            f"⏳ Validity: {duration} days\n\n"
+            "User ko notification bhejne ki koshish ki gayi hai.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎁 Assign Another Plan", callback_data="adm_assign_plan")],
+                [InlineKeyboardButton("💳 Plan Studio", callback_data="adm_plans"), InlineKeyboardButton("⬅️ Admin Dashboard", callback_data="adm_back")],
+            ]),
+        )
+        try:
+            await context.bot.send_message(
+                int(target_uid),
+                f"🎉 Membership activated!\n\n"
+                f"Plan: {plan_name}\n"
+                f"Validity: {duration} days\n\n"
+                "Aapka plan ab active hai. /start se dashboard open karein.",
+            )
+        except Exception:
+            # Assignment is already persisted; Telegram cannot DM users who
+            # have never opened the bot or blocked it.
+            pass
 
     elif data == "adm_view_user" and is_admin(user.id):
         if int(user.id) != int(ADMIN_ID):
@@ -3446,6 +3545,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if is_admin(user.id):
+        if context.user_data.pop("awaiting_plan_user", False):
+            target_uid = resolve_user_id(text)
+            if not target_uid:
+                await safe_reply(update.message, "User nahi mila. Numeric Telegram Chat ID ya saved @username bhejo.", reply_markup=admin_back_kb())
+                return
+            await safe_reply(
+                update.message,
+                f"🎁 ASSIGN MEMBERSHIP PLAN\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Step 2/2 • User: {target_uid}\n\n"
+                "Ab jis plan ko dena hai uska button dabao. Plan ki configured validity automatically apply hogi.",
+                reply_markup=assign_plan_keyboard(target_uid),
+            )
+            return
+
         # Migration for an older screen that may still be present in persisted
         # Telegram user_data after an update. Continue it in the new wizard;
         # never ask the owner for the old pipe-separated format again.
@@ -4303,7 +4417,8 @@ def self_check() -> int:
     # 6) handlers/functions present (pakka file poori hai)
     required = ["main", "start_command", "callback_query_handler", "_route_callback",
                 "handle_text", "handle_document", "handle_photo", "handle_video",
-                "error_handler", "start_bot_process", "stop_bot_process"]
+                "error_handler", "start_bot_process", "stop_bot_process",
+                "grant_plan", "handle_plan_wizard", "assign_plan_keyboard"]
     missing = [n for n in required if n not in globals()]
     print(f" Functions       : {len(required) - len(missing)}/{len(required)} present")
     if missing:
