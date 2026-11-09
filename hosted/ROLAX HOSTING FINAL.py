@@ -384,7 +384,7 @@ AI_PROVIDER_META = {
         "name": "Google Gemini",
         "env": "GEMINI_API_KEY",
         "model_env": "GEMINI_MODEL",
-        "model": "gemini-3.8-flash",
+        "model": "gemini-3.5-flash-lite",
     },
     "groq": {
         "name": "Groq",

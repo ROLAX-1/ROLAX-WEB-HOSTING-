@@ -111,7 +111,7 @@ ${payload}`;
 
   const engine = gemini ? "gemini" : groq ? "groq" : openai ? "openai" : anthropic ? "anthropic" : "openai";
   const model = gemini
-    ? (process.env.GEMINI_MODEL || "gemini-3.8-flash")
+    ? (process.env.GEMINI_MODEL || "gemini-3.5-flash-lite")
     : groq
       ? (process.env.GROQ_MODEL || "llama-3.3-70b-versatile")
       : openai
