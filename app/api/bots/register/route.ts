@@ -48,6 +48,15 @@ const DEFAULT_SITE_ID = "rolax-main-hosted";
 const DEFAULT_ENTRY = "ROLAX HOSTING FINAL.py";
 const DEFAULT_SOURCE = path.join(process.cwd(), "hosted", DEFAULT_ENTRY);
 
+function safeFileName(name: string) {
+  const clean = String(name || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(part => part && part !== "." && part !== "..")
+    .join("/");
+  return clean.slice(0, 240) || "bot.py";
+}
+
 type G = {
   bots: Map<string, Reg>;
   stats: Map<string, Stat>;
@@ -286,13 +295,22 @@ export async function POST(req: NextRequest) {
   if (!/^\d{6,12}:[A-Za-z0-9_-]{20,60}$/.test(token)) {
     return NextResponse.json({ ok: false, error: "Valid bot token chahiye (123456:AA...)" }, { status: 400 });
   }
-  const siteId = String(body.siteId || "site_" + Date.now());
-  const files = Array.isArray(body.files) ? body.files : [];
-  const isPy = files.some((f: any) => /\.py$/i.test(f?.name || ""));
-  const entry = String(body.entry || files.find((f: any) => /\.py$/i.test(f?.name || ""))?.name || "bot.py");
+  const siteId = String(body.siteId || "site_" + Date.now()).slice(0, 120);
+  const incoming = Array.isArray(body.files) ? body.files : [];
+  if (incoming.length > 60) return NextResponse.json({ ok: false, error: "Maximum 60 files allowed" }, { status: 413 });
+  const files: { name: string; content: string }[] = incoming
+    .filter((f: any) => f && typeof f.content === "string")
+    .map((f: any) => ({ name: safeFileName(f.name), content: String(f.content).slice(0, 400_000) }));
+  const totalBytes = files.reduce((n: number, f: { name: string; content: string }) => n + Buffer.byteLength(f.content, "utf8"), 0);
+  if (totalBytes > 8_000_000) return NextResponse.json({ ok: false, error: "Project is larger than 8 MB" }, { status: 413 });
+  const isPy = files.some(f => /\.py$/i.test(f.name));
+  const requestedEntry = body.entry ? safeFileName(String(body.entry)) : "";
+  const entry = requestedEntry && files.some(f => f.name === requestedEntry)
+    ? requestedEntry
+    : files.find(f => /\.py$/i.test(f.name))?.name || requestedEntry || "bot.py";
 
   const reg: Reg = {
-    siteId, token, name: String(body.name || "bot"), entry, files,
+    siteId, token, name: String(body.name || "bot").slice(0, 120), entry, files,
     expiresAt: body.expiresAt, ownerEmail: body.ownerEmail, addedAt: new Date().toISOString(),
   };
   g.bots.set(siteId, reg);

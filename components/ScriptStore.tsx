@@ -5,6 +5,7 @@ import Link from "next/link";
 import { toast } from "@/components/ui/Toaster";
 import { buyScript, downloadScript, hasAccess, useScripts, effectiveAccess, purchaseWithWallet, money } from "@/lib/scripts";
 import { walletOf } from "@/lib/wallet";
+import { loadUsers } from "@/lib/persistent";
 
 export default function ScriptStore() {
   const { plans } = useStore();
@@ -22,7 +23,7 @@ export default function ScriptStore() {
   const myUser = useMemo(() => {
     if (typeof window === "undefined" || !me) return null;
     try {
-      const users = JSON.parse(localStorage.getItem("rolax_users") || "[]");
+      const users = loadUsers();
       const found = users.find((u: any) => u.id === me.id || u.email === me.email);
       return found || me;
     } catch { return me; }

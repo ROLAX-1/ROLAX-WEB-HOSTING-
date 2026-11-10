@@ -1,5 +1,7 @@
 "use client";
 
+import { upsertUser, syncUserToServer, type PersistentUser } from "./persistent";
+
 export type AuthUser = {
   id: string;
   name: string;
@@ -24,18 +26,24 @@ export function getAuth(): AuthUser | null {
   } catch { return null; }
 }
 
-export function setAuth(user: AuthUser) {
+export function setAuth(user: AuthUser, options?: { skipServer?: boolean }) {
   const withStamp = { ...user, loggedInAt: new Date().toISOString() };
   localStorage.setItem(AUTH_KEY, JSON.stringify(withStamp));
   // session backup — refresh/close ke baad bhi admin logout na ho
   try { sessionStorage.setItem(AUTH_KEY, JSON.stringify(withStamp)); } catch {}
-  // also ensure user exists in users list
+  // Local copy is additive and immediately visible to the admin list.
   try {
-    const users = JSON.parse(localStorage.getItem("rolax_users") || "[]");
-    if (!users.find((u: any) => u.email === user.email)) {
-      users.push({ id: user.id, name: user.name, email: user.email, status: "active", createdAt: new Date().toISOString() });
-      localStorage.setItem("rolax_users", JSON.stringify(users));
-    }
+    const record: PersistentUser = {
+      id: user.id,
+      name: user.name,
+      email: user.email.trim().toLowerCase(),
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+    upsertUser(record);
+    // The server adapter is optional; when configured this makes the session
+    // user available after local storage is cleared or on another device.
+    if (!options?.skipServer) void syncUserToServer(record);
   } catch {}
 }
 

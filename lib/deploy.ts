@@ -119,6 +119,27 @@ export function findFile(src: UploadedSource, re: RegExp) {
   return src.files.find(f => re.test(f.name) || re.test(f.name.split("/").pop() || ""));
 }
 
+/** Browser/dashboard copy must not contain bot tokens or .env secrets. */
+export function redactUploadedFiles(files: { name: string; content: string }[]) {
+  return files.map(f => {
+    const base = f.name.split("/").pop() || f.name;
+    if (/^(\.env(?:\..*)?|.*\.(?:pem|key|p12|pfx))$/i.test(base)) {
+      const safe = f.content.split("\n").map(line => {
+        if (!line.includes("=")) return line;
+        const key = line.slice(0, line.indexOf("=")).trim();
+        return key ? `${key}=<configured-on-server>` : line;
+      }).join("\n");
+      return { name: f.name, content: safe };
+    }
+    return {
+      name: f.name,
+      content: f.content
+        .replace(/\b\d{6,12}:[A-Za-z0-9_-]{25,60}/g, "<telegram-token-redacted>")
+        .replace(/((?:api[_-]?key|secret|password|token)\s*[=:]\s*[\"'])[^\"']+([\"'])/gi, "$1<secret-redacted>$2"),
+    };
+  });
+}
+
 export function entryFileOf(src: UploadedSource): string | undefined {
   const priority = [
     /^(bot|main|app|index)\.py$/i,
@@ -142,9 +163,9 @@ export type BotKind = "telegram-python" | "telegram-node" | "discord-python" | "
 export function detectBotKind(src: UploadedSource): { kind: BotKind; botType: string; fileType: string; stack: string } {
   const all = src.files.map(f => f.content).join("\n");
   const names = src.files.map(f => f.name.toLowerCase()).join(" ");
-  const py = src.files.some(f => f.name.endsWith(".py"));
-  const js = src.files.some(f => /\.(js|ts)$/.test(f.name));
-  const html = src.files.some(f => f.name.endsWith(".html"));
+  const py = src.files.some(f => /\.py$/i.test(f.name));
+  const js = src.files.some(f => /\.(js|ts)$/i.test(f.name));
+  const html = src.files.some(f => /\.html$/i.test(f.name));
 
   const telegram = /telebot|pyTelegramBotAPI|aiogram|python-telegram-bot|from telegram|node-telegram-bot-api|telegraf|grammy|BotFather|api\.telegram\.org/i.test(all + " " + names);
   const discord = /discord\.js|discord\.py|discord\.Client|discord\.Intents|nextcord|discord\.ext/i.test(all);
@@ -320,7 +341,7 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
   }
 
   // 4. tabs/spaces (python)
-  const indentationFile = src.files.find(f => f.name.endsWith(".py") && tabsSpacesMixed(f.content));
+  const indentationFile = src.files.find(f => /\.py$/i.test(f.name) && tabsSpacesMixed(f.content));
   if (indentationFile) {
     push({ code: "INDENT_MIX", title: "Indentation error (tabs + spaces mix)", detail: `${indentationFile.name} me tabs aur spaces mix hain — Python isse crash karta hai`, level: "error", fixable: true });
   }
@@ -329,7 +350,7 @@ export async function runDeployChecks(src: UploadedSource): Promise<DeployReport
   if (det.stack === "Python") {
     const req = findFile(src, /requirements\.txt$/i);
     const imports = Array.from(allText.matchAll(/^\s*(?:from|import)\s+([a-zA-Z0-9_]+)/gm)).map(m => m[1]);
-    const thirdParty = Array.from(new Set(imports)).filter(m => !["os", "sys", "time", "json", "random", "asyncio", "logging", "datetime", "re", "math", "typing", "sqlite3", "threading", "subprocess", "requests", "dotenv"].includes(m));
+    const thirdParty = Array.from(new Set(imports)).filter(m => !["os", "sys", "time", "json", "random", "asyncio", "logging", "datetime", "re", "math", "typing", "sqlite3", "threading", "subprocess"].includes(m));
     if (!req && thirdParty.length) {
       push({ code: "NO_REQUIREMENTS", title: "requirements.txt missing", detail: `Ye modules use ho rahe hain par install list nahi hai: ${thirdParty.slice(0, 5).join(", ")}`, level: "warn", fixable: true });
       generated.push({ name: "requirements.txt", content: thirdParty.map(m => m === "telebot" ? "pyTelegramBotAPI" : m === "telegram" ? "python-telegram-bot" : m).join("\n") + "\n" });
@@ -482,7 +503,7 @@ export async function autoFixAndVerify(src: UploadedSource, report: DeployReport
   for (const c of report.errors.concat(report.warnings)) {
     if (!c.fixable) continue;
     if (c.code === "INDENT_MIX") {
-      files.forEach(f => { if (f.name.endsWith(".py")) { f.content = f.content.split("\n").map(l => l.replace(/^\t+/, m => "    ".repeat(m.length))).join("\n"); } });
+      files.forEach(f => { if (/\.py$/i.test(f.name)) { f.content = f.content.split("\n").map(l => l.replace(/^\t+/, m => "    ".repeat(m.length))).join("\n"); } });
       applied.push("Tabs → 4 spaces (Python indentation fix)");
     }
     if (c.code === "NO_INDEX") {
@@ -491,8 +512,8 @@ export async function autoFixAndVerify(src: UploadedSource, report: DeployReport
     }
     if (c.code === "HARDCODED_PORT") {
       files.forEach(f => {
-        if (f.name.endsWith(".py")) f.content = f.content.replace(/port\s*=\s*3000/g, "port=int(os.environ.get('PORT', 8080))");
-        if (/\.(js|ts)$/.test(f.name)) f.content = f.content.replace(/listen\(\s*3000/g, "listen(process.env.PORT || 8080");
+        if (/\.py$/i.test(f.name)) f.content = f.content.replace(/port\s*=\s*3000/g, "port=int(os.environ.get('PORT', 8080))");
+        if (/\.(js|ts)$/i.test(f.name)) f.content = f.content.replace(/listen\(\s*3000/g, "listen(process.env.PORT || 8080");
       });
       applied.push("Hardcoded port → process.env.PORT");
     }

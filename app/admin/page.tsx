@@ -910,7 +910,11 @@ export default function AdminPage() {
                         <td className="px-4 py-3 flex gap-1 flex-wrap">
                           <button onClick={() => setFeatUser(u)} className="px-2 py-1 rounded-full bg-[#6C5CE7]/20 border border-[#6C5CE7]/40 text-[#a89bff] text-xs">Features</button>
                           <button onClick={() => { setUsers(users.map(x => x.id === u.id ? { ...x, status: x.status === "active" ? "banned" as const : "active" as const } : x)); toast("Status updated", "info"); }} className="px-2 py-1 rounded-full bg-[#222] text-xs">{u.status === "active" ? "Ban" : "Unban"}</button>
-                          <button onClick={() => { if (confirm("Delete user?")) { setUsers(users.filter(x => x.id !== u.id)); toast("Deleted", "info"); } }} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-xs">Delete</button>
+                          <button onClick={() => {
+                            if (!confirm("Block this user? Existing data will be preserved.")) return;
+                            setUsers(users.map(x => x.id === u.id ? { ...x, status: "banned" as const, blockedAt: new Date().toISOString() } : x));
+                            toast("User marked blocked; record preserved", "info");
+                          }} className="px-2 py-1 rounded-full bg-red-500/10 text-red-400 text-xs">Block</button>
                         </td>
                       </tr>
                     ))}

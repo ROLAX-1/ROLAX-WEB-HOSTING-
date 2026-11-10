@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
@@ -17,6 +18,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit, urlencode
+from urllib.request import Request as URLRequest, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "hosted" / "ROLAX HOSTING FINAL.py"
@@ -56,6 +58,50 @@ def _public_webhook_url(request_origin: str = "") -> str:
     if not value.startswith(("http://", "https://")):
         value = "https://" + value
     return value + "/api/rolax_webhook"
+
+
+def _state_api_url(request_origin: str) -> str:
+    if not os.environ.get("DATABASE_URL") or not request_origin:
+        return ""
+    return request_origin.rstrip("/") + "/api/telegram/state"
+
+
+def _state_signature(token: str) -> str:
+    return hmac.new(token.encode(), b"rolax-telegram-state-v1", hashlib.sha256).hexdigest()
+
+
+def _fetch_durable_state(request_origin: str) -> str:
+    url = _state_api_url(request_origin)
+    token = _token()
+    if not url or not token:
+        return ""
+    try:
+        request = URLRequest(url, headers={"X-Rolax-State-Signature": _state_signature(token)})
+        with urlopen(request, timeout=3) as response:
+            value = json.loads(response.read().decode("utf-8"))
+        return str(value.get("state") or "") if value.get("ok") else ""
+    except Exception:
+        return ""
+
+
+def _save_durable_state(request_origin: str, state_token: str) -> None:
+    url = _state_api_url(request_origin)
+    token = _token()
+    if not url or not token or not state_token:
+        return
+    try:
+        body = json.dumps({"state": state_token}).encode("utf-8")
+        request = URLRequest(
+            url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json", "X-Rolax-State-Signature": _state_signature(token)},
+        )
+        with urlopen(request, timeout=3):
+            pass
+    except Exception:
+        # URL snapshot remains the fallback when the database is unavailable.
+        pass
 
 
 def _load_bot_module(state_token: str = ""):
@@ -120,7 +166,24 @@ async def _process_update(payload: dict[str, Any], state_token: str = "", reques
     token = _token()
     if not token:
         raise RuntimeError("ROLAX_MAIN_BOT_TOKEN is not configured")
-    module = _load_bot_module(state_token)
+    durable_state = _fetch_durable_state(request_origin)
+    effective_state = durable_state or state_token
+    module = _load_bot_module(effective_state)
+    # A warm Python instance may have loaded an older webhook URL before a
+    # website registration/update. Refresh the shared website map before this
+    # request so the next export cannot overwrite a newer premium/account row.
+    try:
+        snapshot = module._open_webhook_state(effective_state) if effective_state else None
+        if isinstance(snapshot, dict):
+            if isinstance(snapshot.get("website_users"), dict):
+                module._WEBHOOK_WEBSITE_USERS = dict(snapshot.get("website_users") or {})
+            if isinstance(snapshot.get("users"), dict):
+                local_users = module.get_users()
+                merged_users = module._merge_user_maps(local_users, snapshot.get("users") or {})
+                if merged_users != local_users:
+                    module.save_json(module.USERS_FILE, merged_users)
+    except Exception:
+        pass
     from telegram import Update
 
     # No post_init/post_shutdown: those are for the persistent VPS polling
@@ -161,6 +224,7 @@ async def _process_update(payload: dict[str, Any], state_token: str = "", reques
         try:
             export_state = getattr(module, "export_webhook_state", None)
             current_state = export_state() if export_state else ""
+            _save_durable_state(request_origin, current_state)
             await _sync_webhook_state(app.bot, token, state_token, request_origin, current_state)
         except Exception as exc:
             print("ROLAX user snapshot export error:", type(exc).__name__, str(exc)[:300], file=sys.stderr)

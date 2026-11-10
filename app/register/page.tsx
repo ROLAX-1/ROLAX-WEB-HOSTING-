@@ -9,6 +9,7 @@ import { useStore } from "@/lib/store";
 import { toast } from "@/components/ui/Toaster";
 import GoogleSignIn from "@/components/GoogleSignIn";
 import type { GoogleProfile } from "@/lib/google";
+import { loadPersistentArray, savePersistentArray, saveUsers, serverUserAction } from "@/lib/persistent";
 
 export default function RegisterPage() {
   const [name, setName] = useState("");
@@ -27,6 +28,7 @@ export default function RegisterPage() {
 
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
+    const normalizedEmail = email.trim().toLowerCase();
     if (password !== confirm) {
       toast("Passwords do not match", "error");
       return;
@@ -36,27 +38,35 @@ export default function RegisterPage() {
       return;
     }
     setLoading(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
-        const registered = JSON.parse(localStorage.getItem("rolax_registered") || "[]");
-        if (registered.find((u: any) => u.email === email)) {
+        const registered = loadPersistentArray<any>("rolax_registered");
+        if (registered.find((u: any) => String(u.email || "").toLowerCase() === normalizedEmail)) {
           toast("Email already registered", "error");
           setLoading(false);
           return;
         }
-        const newUser = { id: "u_" + Date.now(), name, email, password, createdAt: new Date().toISOString() };
-        registered.push(newUser);
-        localStorage.setItem("rolax_registered", JSON.stringify(registered));
+        const newUser = { id: "u_" + Date.now(), name: name.trim(), email: normalizedEmail, password, createdAt: new Date().toISOString() };
+        const publicUser = { id: newUser.id, name: newUser.name, email: newUser.email, status: "active", createdAt: newUser.createdAt };
 
-        // Also add to users list
-        const users = JSON.parse(localStorage.getItem("rolax_users") || "[]");
-        users.push({ id: newUser.id, name, email, status: "active", createdAt: newUser.createdAt });
-        localStorage.setItem("rolax_users", JSON.stringify(users));
+        // Try the durable database first when configured. A missing database
+        // keeps demo/local mode usable; a real server rejection does not.
+        const durable = await serverUserAction("register", { ...publicUser, password });
+        if (durable.durable && !durable.ok) {
+          toast(durable.error || "Email already registered", "error");
+          setLoading(false);
+          return;
+        }
+
+        // Both browser collections are additive and backed up; an empty or
+        // partial write cannot erase older accounts.
+        savePersistentArray("rolax_registered", [...registered, newUser]);
+        saveUsers([...loadPersistentArray<any>("rolax_users"), publicUser]);
 
         localStorage.setItem("rolax_auth_method", "email");
-        recordLogin({ userId: newUser.id, email, name, method: "email" });
-        setAuth({ id: newUser.id, name, email, isAdmin: false });
-        toast("Account created successfully!", "success");
+        recordLogin({ userId: newUser.id, email: normalizedEmail, name: newUser.name, method: "email" });
+        setAuth({ id: newUser.id, name: newUser.name, email: normalizedEmail, isAdmin: false });
+        toast(durable.ok ? "Account created and saved securely ✅" : "Account created locally. Add DATABASE_URL for cross-device recovery.", durable.ok ? "success" : "info");
         router.push("/dashboard");
       } catch {
         toast("Registration failed", "error");

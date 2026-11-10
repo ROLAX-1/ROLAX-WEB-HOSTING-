@@ -46,7 +46,7 @@ const STDLIB = new Set([
 export function pythonImports(files: SourceFile[]): string[] {
   const mods = new Set<string>();
   for (const f of files) {
-    if (!f.name.endsWith(".py")) continue;
+    if (!/\.py$/i.test(f.name)) continue;
     const re1 = /^\s*import\s+([a-zA-Z0-9_. ,]+)/gm;
     const re2 = /^\s*from\s+([a-zA-Z0-9_]+)[\s.]+import\s/gm;
     let m: RegExpExecArray | null;
@@ -106,7 +106,7 @@ export function generateSupportFiles(files: SourceFile[], stack: string, entryFi
   const token = literalToken(files);
 
   /* ---------- PYTHON ---------- */
-  if (stack === "Python" || files.some(f => f.name.endsWith(".py"))) {
+  if (stack === "Python" || files.some(f => /\.py$/i.test(f.name))) {
     const imports = pythonImports(files);
     const pkgs = Array.from(new Set(imports.map(i => PY_PACKAGES[i] ?? i).filter(Boolean)));
 
@@ -158,7 +158,7 @@ export function generateSupportFiles(files: SourceFile[], stack: string, entryFi
   }
 
   /* ---------- NODE ---------- */
-  if (stack === "Node.js" || files.some(f => /\.(js|mjs|ts)$/.test(f.name))) {
+  if (stack === "Node.js" || files.some(f => /\.(js|mjs|ts)$/i.test(f.name))) {
     const pkg = existing(files, /^package\.json$/i);
     const all = files.map(f => f.content).join("\n");
     const deps: Record<string, string> = {};

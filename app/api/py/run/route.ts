@@ -19,8 +19,18 @@ type Body = { files?: { name: string; content: string }[]; entry?: string; text?
 const PY = process.env.PYTHON_BIN || "python3";
 const BRIDGE = path.join(process.cwd(), "runtime", "pybridge.py");
 
+function safeFileName(name: string) {
+  const clean = String(name || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(part => part && part !== "." && part !== "..")
+    .join("/");
+  return clean.slice(0, 240) || "uploaded.py";
+}
+
 function pickEntry(files: { name: string; content: string }[], entry?: string) {
-  if (entry && files.some(f => f.name === entry || f.name.endsWith("/" + entry))) return entry;
+  const wanted = entry ? safeFileName(entry) : "";
+  if (wanted && files.some(f => f.name === wanted || f.name.endsWith("/" + wanted))) return wanted;
   const py = files.filter(f => /\.py$/i.test(f.name));
   const pref = ["bot.py", "main.py", "app.py", "index.py", "run.py"];
   for (const p of pref) {
@@ -68,7 +78,15 @@ export async function POST(req: NextRequest) {
   let body: Body;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 }); }
 
-  const files = (body.files || []).filter(f => f && typeof f.content === "string");
+  const incoming = (body.files || []).filter(f => f && typeof f.content === "string");
+  if (incoming.length > 60) {
+    return NextResponse.json({ ok: false, python: true, error: "Maximum 60 files allowed" }, { status: 413 });
+  }
+  const files = incoming.map(f => ({ name: safeFileName(f.name), content: f.content.slice(0, 400_000) }));
+  const totalBytes = files.reduce((n, f) => n + Buffer.byteLength(f.content, "utf8"), 0);
+  if (totalBytes > 8_000_000) {
+    return NextResponse.json({ ok: false, python: true, error: "Project is larger than 8 MB" }, { status: 413 });
+  }
   const py = files.filter(f => /\.py$/i.test(f.name));
   if (!py.length) {
     return NextResponse.json({ ok: false, python: false, error: "Koi .py file nahi mili" }, { status: 200 });
@@ -77,10 +95,9 @@ export async function POST(req: NextRequest) {
   const dir = await mkdtemp(path.join(tmpdir(), "rolax-py-"));
   try {
     for (const f of files) {
-      const safe = f.name.replace(/^\/+/, "").replace(/\.\.(\/|\\)/g, "");
-      const target = path.join(dir, safe);
+      const target = path.join(dir, f.name);
       await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, f.content.slice(0, 400_000), "utf8");
+      await writeFile(target, f.content, "utf8");
     }
     // .env na ho to banake token inject karo (agar code me mila)
     const entry = pickEntry(files, body.entry) || py[0].name;

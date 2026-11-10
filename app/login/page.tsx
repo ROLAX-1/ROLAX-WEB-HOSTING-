@@ -9,6 +9,7 @@ import { recordLogin } from "@/components/admin/StatsPanel";
 import { toast } from "@/components/ui/Toaster";
 import GoogleSignIn from "@/components/GoogleSignIn";
 import type { GoogleProfile } from "@/lib/google";
+import { loadPersistentArray, saveUsers, serverUserAction, upsertUser } from "@/lib/persistent";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -25,11 +26,12 @@ export default function LoginPage() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    const normalizedEmail = email.trim().toLowerCase();
     setLoading(true);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       // Check admin credentials
-      if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+      if (normalizedEmail === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
         localStorage.setItem("rolax_auth_method", "email");
         recordLogin({ userId: "admin_001", email, name: "ROLAX Admin", method: "email" });
         setAuth({ id: "admin_001", name: "ROLAX Admin", email, isAdmin: true });
@@ -39,40 +41,65 @@ export default function LoginPage() {
         return;
       }
 
-      // Check existing users from localStorage
+      // First ask the durable adapter. If DATABASE_URL is configured this is
+      // the source of truth and allows login from a new browser/device.
       try {
-        const users = JSON.parse(localStorage.getItem("rolax_users") || "[]");
-        const found = users.find((u: any) => u.email === email);
-        // Also check if there's a registered user via register page (stored separately)
-        const registered = JSON.parse(localStorage.getItem("rolax_registered") || "[]");
-        const regFound = registered.find((u: any) => u.email === email && u.password === password);
+        const durable = await serverUserAction("login", { email: normalizedEmail, password });
+        if (durable.durable) {
+          if (!durable.ok || !durable.user) {
+            toast(durable.error || "Invalid credentials", "error");
+            setLoading(false);
+            return;
+          }
+          if (durable.user.status === "banned") {
+            toast("This account is blocked", "error");
+            setLoading(false);
+            return;
+          }
+          const serverUser: any = { ...durable.user, email: normalizedEmail };
+          upsertUser(serverUser);
+          saveUsers([...loadPersistentArray<any>("rolax_users"), serverUser]);
+          localStorage.setItem("rolax_auth_method", "email");
+          recordLogin({ userId: serverUser.id, email: normalizedEmail, name: serverUser.name || normalizedEmail.split("@")[0], method: "email" });
+          setAuth({ id: serverUser.id, name: serverUser.name || normalizedEmail.split("@")[0], email: normalizedEmail, isAdmin: !!serverUser.isAdmin });
+          toast("Login successful ✅", "success");
+          router.push(serverUser.isAdmin ? "/admin" : "/dashboard");
+          setLoading(false);
+          return;
+        }
+
+        // Local fallback is kept for an unconfigured demo, but it is still
+        // additive and checks the saved password when one exists.
+        const users = loadPersistentArray<any>("rolax_users");
+        const found = users.find((u: any) => String(u.email || "").toLowerCase() === normalizedEmail);
+        const registered = loadPersistentArray<any>("rolax_registered");
+        const regFound = registered.find((u: any) => String(u.email || "").toLowerCase() === normalizedEmail && u.password === password);
 
         if (regFound || found) {
-          // If found but password check needed - for demo allow any password for non-admin if user exists, or check regFound
-          if (regFound || found) {
-            const name = regFound?.name || found?.name || email.split("@")[0];
-            // Simple password validation: if regFound exists, password already matched. If only in users list, accept.
-            localStorage.setItem("rolax_auth_method", "email");
-            recordLogin({ userId: found?.id || regFound?.id || "", email, name, method: "email" });
-            setAuth({ id: found?.id || regFound?.id || "u_" + Date.now(), name, email, isAdmin: false });
-            toast("Login successful!", "success");
-            router.push("/dashboard");
-            setLoading(false);
-            return;
-          }
-        }
-        // For demo: allow any non-admin login to create session
-        if (email && password.length >= 3) {
-          // Check if email exists in registered, if password mismatch -> error
-          if (registered.find((u: any) => u.email === email && u.password !== password)) {
-            toast("Invalid password", "error");
-            setLoading(false);
-            return;
-          }
+          const name = regFound?.name || found?.name || normalizedEmail.split("@")[0];
           localStorage.setItem("rolax_auth_method", "email");
-          recordLogin({ userId: "", email, name: email.split("@")[0], method: "email" });
-          setAuth({ id: "u_" + Date.now(), name: email.split("@")[0], email, isAdmin: false });
+          recordLogin({ userId: found?.id || regFound?.id || "", email: normalizedEmail, name, method: "email" });
+          setAuth({ id: found?.id || regFound?.id || "u_" + Date.now(), name, email: normalizedEmail, isAdmin: false });
           toast("Login successful!", "success");
+          router.push("/dashboard");
+          setLoading(false);
+          return;
+        }
+        if (registered.find((u: any) => String(u.email || "").toLowerCase() === normalizedEmail)) {
+          toast("Invalid password", "error");
+          setLoading(false);
+          return;
+        }
+        // Preserve the old guest/demo behavior only when no durable adapter is
+        // configured; the account is immediately written to both local caches.
+        if (normalizedEmail && password.length >= 3) {
+          const id = "u_" + Date.now();
+          const guest = { id, name: normalizedEmail.split("@")[0], email: normalizedEmail, status: "active", createdAt: new Date().toISOString() };
+          saveUsers([...users, guest]);
+          localStorage.setItem("rolax_auth_method", "email");
+          recordLogin({ userId: id, email: normalizedEmail, name: guest.name, method: "email" });
+          setAuth({ id, name: guest.name, email: normalizedEmail, isAdmin: false });
+          toast("Login successful (local cache). Add DATABASE_URL for cross-device recovery.", "info");
           router.push("/dashboard");
         } else {
           toast("Invalid credentials", "error");

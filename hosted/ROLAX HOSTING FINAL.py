@@ -318,6 +318,10 @@ def save_redeem_codes(data: dict) -> None: save_json(REDEEM_FILE, data)
 # instance/redeployment can restore the user list before handling /start.
 # The blob is encrypted with the bot token; it contains no token or secret.
 _WEBHOOK_STATE_ENV = os.environ.get("ROLAX_WEBHOOK_STATE", "").strip()
+# The website auth/premium fallback shares the encrypted webhook snapshot.
+# Keep unknown website records intact when the Python bot exports its next
+# Telegram-user snapshot, otherwise a bot update could erase website plans.
+_WEBHOOK_WEBSITE_USERS: dict = {}
 _WEBHOOK_STATE_MAX_CHARS = 7000
 
 
@@ -367,10 +371,16 @@ def _open_webhook_state(token: str) -> Optional[dict]:
 
 
 def _restore_webhook_state() -> None:
+    global _WEBHOOK_WEBSITE_USERS
     if not _WEBHOOK_STATE_ENV:
         return
     snapshot = _open_webhook_state(_WEBHOOK_STATE_ENV)
-    remote_users = snapshot.get("users") if isinstance(snapshot, dict) else None
+    if not isinstance(snapshot, dict):
+        return
+    remote_website_users = snapshot.get("website_users")
+    if isinstance(remote_website_users, dict):
+        _WEBHOOK_WEBSITE_USERS = dict(remote_website_users)
+    remote_users = snapshot.get("users")
     if not isinstance(remote_users, dict) or not remote_users:
         return
     local_users = get_users()
@@ -384,9 +394,13 @@ _restore_webhook_state()
 
 
 def export_webhook_state() -> str:
-    """Return the latest encrypted user-list snapshot for the adapter."""
+    """Return the latest encrypted state snapshot for the adapter."""
     users = get_users()
-    token = _seal_webhook_state({"version": 1, "users": users})
+    token = _seal_webhook_state({
+        "version": 1,
+        "users": users,
+        "website_users": _WEBHOOK_WEBSITE_USERS,
+    })
     if len(token) > _WEBHOOK_STATE_MAX_CHARS:
         logger.error("Telegram user snapshot is too large for webhook URL (%s chars)", len(token))
         return ""
@@ -4052,6 +4066,16 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(msg, f"Video Broadcast sent to {cnt} users successfully!")
 
 
+async def handle_any_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Last-resort registration for voice/sticker/contact/location/other updates.
+
+    The specialised handlers register text/media/callbacks themselves. This
+    final catch-all covers every remaining first interaction so the admin list
+    never depends on Telegram attaching a command entity.
+    """
+    ensure_update_user(update)
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _has_user_update(update):
         logger.info("Ignoring text update without a Telegram user")
@@ -4916,6 +4940,8 @@ def build_application(lifecycle: bool = True) -> Application:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     # sabse aakhir: koi bhi bachi hui command (/START, /start@bot, typo)
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    # Final catch-all runs only when no specialised handler above matched.
+    app.add_handler(MessageHandler(filters.ALL, handle_any_incoming))
     app.add_error_handler(error_handler)
     return app
 

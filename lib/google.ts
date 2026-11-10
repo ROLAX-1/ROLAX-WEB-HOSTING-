@@ -1,5 +1,6 @@
 "use client";
 import { setAuth } from "./auth";
+import { upsertUser, syncUserToServer } from "./persistent";
 
 const CLIENT_ID_KEY = "rolax_google_client_id";
 const DEFAULT_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
@@ -106,15 +107,23 @@ export function finishGoogleLogin(profile: GoogleProfile, adminEmail: string) {
 
   const isAdmin = profile.email.toLowerCase() === adminEmail.toLowerCase();
   const id = (profile.sub || "g_" + profile.email).slice(0, 40);
-  setAuth({ id, name: profile.name, email: profile.email, isAdmin });
+  setAuth({ id, name: profile.name, email: profile.email, isAdmin }, { skipServer: true });
+  const record = {
+    id,
+    name: profile.name,
+    email: profile.email.trim().toLowerCase(),
+    status: "active",
+    createdAt: new Date().toISOString(),
+    googleSub: profile.sub,
+    picture: profile.picture,
+  };
   try {
     localStorage.setItem("rolax_google_profile", JSON.stringify(profile));
     localStorage.setItem("rolax_login_method", "google");
-    const users = JSON.parse(localStorage.getItem("rolax_users") || "[]");
-    if (!users.find((u: any) => u.email === profile.email)) {
-      users.push({ id, name: profile.name, email: profile.email, status: "active", createdAt: new Date().toISOString() });
-      localStorage.setItem("rolax_users", JSON.stringify(users));
-    }
+    upsertUser(record);
+    // A configured server database makes Google accounts recoverable on a
+    // different browser/device; localStorage remains only the fast cache.
+    void syncUserToServer(record, undefined, "google");
   } catch { /* ignore storage errors */ }
   return { isAdmin };
 }

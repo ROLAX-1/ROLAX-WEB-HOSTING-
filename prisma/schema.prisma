@@ -16,10 +16,17 @@ model User {
   planId    String?
   planExpiry DateTime?
   status    String   @default("active")
+  metadata  Json?
   createdAt DateTime @default(now())
   websites  Website[]
   payments  Payment[]
   tickets   Ticket[]
+}
+
+model TelegramState {
+  id        String   @id
+  payload   Json
+  updatedAt DateTime @updatedAt
 }
 
 model Website {

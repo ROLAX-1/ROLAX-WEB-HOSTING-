@@ -1,5 +1,6 @@
 "use client";
 import { create } from "zustand";
+import { loadUsers, saveUsers, loadServerUsers, type PersistentUser } from "./persistent";
 
 export type Plan = {
   id: string;
@@ -432,7 +433,22 @@ export const useStore = create<Store>((set, get) => ({
   setWebsites: (websites) => { save("rolax_websites", websites); set({ websites }); },
   setPayments: (payments) => { save("rolax_payments", payments); set({ payments }); },
   setTickets: (tickets) => { save("rolax_tickets", tickets); set({ tickets }); },
-  setUsers: (users) => { save("rolax_users", users); set({ users }); },
+  setUsers: (users) => {
+    // User rows are merge-preserved: an admin update or a temporary empty
+    // state can never silently delete a previously seen account.
+    const merged = saveUsers(users as unknown as PersistentUser[]) as UserType[];
+    set({ users: merged });
+    void (async () => {
+      for (const user of merged) {
+        await fetch("/api/users", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(user),
+          cache: "no-store",
+        }).catch(() => {});
+      }
+    })();
+  },
 
   hydrate: () => {
     if (get().hydrated) return;
@@ -443,10 +459,12 @@ export const useStore = create<Store>((set, get) => ({
         const sync = () => {
           const s = get() as any;
           const next: any = {};
-          ["plans", "features", "settings", "websites", "payments", "tickets", "users", "stacks", "wallets"].forEach(k => {
+          ["plans", "features", "settings", "websites", "payments", "tickets", "stacks", "wallets"].forEach(k => {
             const raw = localStorage.getItem("rolax_" + k);
             if (raw) { try { next[k] = JSON.parse(raw); } catch {} }
           });
+          const localUsers = loadUsers();
+          if (localUsers.length) next.users = localUsers;
           if (Object.keys(next).length) set(next);
         };
         window.addEventListener("storage", sync);
@@ -466,11 +484,18 @@ export const useStore = create<Store>((set, get) => ({
     const websites = sanitizeWebsites(load<any>("rolax_websites", []));
     const payments = load<Payment[]>("rolax_payments", []);
     const tickets = load<Ticket[]>("rolax_tickets", []);
-    const users = load<UserType[]>("rolax_users", []);
+    const users = loadUsers() as UserType[];
     const features = load<FeatureDef[]>("rolax_features", DEFAULT_FEATURES);
     // NOTE: koi dummy/demo data nahi — jo user khud kamayega wahi revenue me dikhega
 
     set({ plans, stacks, wallets, settings, features: features.length ? features : DEFAULT_FEATURES, websites, payments, tickets, users, hydrated: true });
+    // A configured database is the durable source of truth. Merge it into the
+    // browser cache; never replace local rows with an empty/error response.
+    void loadServerUsers().then(result => {
+      if (!result.ok || !result.durable || !result.users?.length) return;
+      const merged = saveUsers([...loadUsers(), ...result.users]) as UserType[];
+      set({ users: merged });
+    }).catch(() => {});
   },
 }));
 

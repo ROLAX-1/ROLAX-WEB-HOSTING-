@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { getAuth, clearAuth } from "@/lib/auth";
 import { useStore, ADMIN_EMAIL, durationLabel, durationInDays, planTotal } from "@/lib/store";
 import { analyzeSite, autoFixSite, needsManualAction, detectFromFileName, MAX_ERRORS } from "@/lib/hosting";
-import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, extractTelegramToken, pySelfTest, type DeployReport, type UploadedSource } from "@/lib/deploy";
+import { readUpload, runDeployChecks, autoFixAndVerify, reportToSiteFields, extractTelegramToken, pySelfTest, redactUploadedFiles, type DeployReport, type UploadedSource } from "@/lib/deploy";
 import { saveBotToken, getBotToken, removeBotToken } from "@/lib/bottoken";
 import { extractCommands } from "@/lib/botruntime";
 import BotWorker, { useBotStatus, restartBot } from "@/components/BotWorker";
@@ -207,7 +207,9 @@ export default function DashboardPage() {
       createdAt: new Date().toISOString(),
       ...reportToSiteFields(report),
       entryFile: report.entryFile,
-      src: src.files.map(f => ({ name: f.name, content: f.content.slice(0, 4000) })),
+      // Keep code for re-registering, but never copy tokens/.env secrets into
+      // the browser-backed site record or admin view.
+      src: redactUploadedFiles(src.files).map(f => ({ name: f.name, content: f.content.slice(0, 4000) })),
       bundle: report.bundle,
     };
     setWebsites([...websites, site]);
