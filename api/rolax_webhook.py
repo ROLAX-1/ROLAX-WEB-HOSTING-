@@ -143,7 +143,7 @@ async def _sync_webhook_state(bot: Any, token: str, state_token: str, request_or
         return
     separator = "&" if "?" in url else "?"
     webhook_url = url + separator + urlencode({"state": current_state})
-    if len(webhook_url) > 7500:
+    if len(webhook_url) > 7000:
         print("ROLAX user snapshot skipped: webhook URL is too large", file=sys.stderr)
         return
     try:

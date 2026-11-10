@@ -122,8 +122,8 @@ export async function readTelegramState(req: NextRequest): Promise<ReadResult> {
     return { ok: false, durable: false, state: { version: 1, users: {}, website_users: {} }, webhookUrl, error: "state_invalid" };
   }
   const state = decoded || { version: 1, users: {}, website_users: {} };
-  if (!state.website_users || typeof state.website_users !== "object") state.website_users = {};
-  if (!state.users || typeof state.users !== "object") state.users = {};
+  if (!state.website_users || typeof state.website_users !== "object" || Array.isArray(state.website_users)) state.website_users = {};
+  if (!state.users || typeof state.users !== "object" || Array.isArray(state.users)) state.users = {};
   return { ok: true, durable: true, state, webhookUrl };
 }
 

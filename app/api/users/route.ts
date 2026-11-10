@@ -145,9 +145,9 @@ async function telegramFallback(req: NextRequest, body: UserInput & { action?: s
 /**
  * GET /api/users?email=... or /api/users
  *
- * This endpoint is deliberately unavailable rather than silently falling back
- * to a serverless filesystem. A Vercel function's /tmp/process filesystem is
- * not shared or durable across instances.
+ * It never falls back to a Vercel function filesystem. With DATABASE_URL it
+ * uses PostgreSQL; otherwise the manager bot's encrypted webhook snapshot is
+ * used (and refuses writes if that snapshot would exceed Telegram's URL size).
  */
 export async function GET(req: NextRequest) {
   const db = databaseConfigured() ? await ready() : null;

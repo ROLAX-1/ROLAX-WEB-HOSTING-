@@ -1,6 +1,6 @@
 "use client";
 import { create } from "zustand";
-import { loadUsers, saveUsers, loadServerUsers, type PersistentUser } from "./persistent";
+import { loadUsers, saveUsers, loadServerUsers, syncUsersToServer, type PersistentUser } from "./persistent";
 
 export type Plan = {
   id: string;
@@ -438,16 +438,7 @@ export const useStore = create<Store>((set, get) => ({
     // state can never silently delete a previously seen account.
     const merged = saveUsers(users as unknown as PersistentUser[]) as UserType[];
     set({ users: merged });
-    void (async () => {
-      for (const user of merged) {
-        await fetch("/api/users", {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(user),
-          cache: "no-store",
-        }).catch(() => {});
-      }
-    })();
+    void syncUsersToServer(merged).catch(() => {});
   },
 
   hydrate: () => {

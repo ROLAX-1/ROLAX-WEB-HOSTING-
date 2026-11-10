@@ -149,6 +149,43 @@ export async function serverUserAction(
   }
 }
 
+export async function patchUserToServer(user: PersistentUser): Promise<ServerUserResult> {
+  try {
+    const response = await fetch("/api/users", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(user),
+      cache: "no-store",
+    });
+    const result = await response.json().catch(() => ({}));
+    return {
+      ok: Boolean(result?.ok),
+      durable: Boolean(result?.durable),
+      user: result?.user,
+      error: result?.error || (response.ok ? undefined : `HTTP ${response.status}`),
+    };
+  } catch (error: any) {
+    return { ok: false, durable: false, error: error?.message || "server persistence unavailable" };
+  }
+}
+
+export async function syncUsersToServer(users: PersistentUser[]) {
+  const results: ServerUserResult[] = [];
+  for (const user of users) {
+    let result: ServerUserResult = { ok: false, durable: false };
+    // A transient cold start/network failure must not lose an admin plan
+    // assignment. Retry a couple of times; permanent state-size errors return
+    // immediately on the final attempt and remain visible to the caller.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      result = await patchUserToServer(user);
+      if (result.ok || (result.durable && /state_too_large/i.test(result.error || ""))) break;
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+    results.push(result);
+  }
+  return results;
+}
+
 export async function loadServerUsers(): Promise<ServerUserResult> {
   try {
     const response = await fetch("/api/users", { cache: "no-store" });
