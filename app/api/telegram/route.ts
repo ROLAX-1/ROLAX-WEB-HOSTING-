@@ -32,6 +32,12 @@ export async function POST(req: NextRequest) {
   }
 
   const t = token.trim();
+  const manager = String(process.env.ROLAX_MAIN_BOT_TOKEN || process.env.BOT_TOKEN || "").trim();
+  // The manager bot's webhook URL contains the encrypted user/plan snapshot.
+  // Generic webhook controls must not replace or delete it with a clean URL.
+  if (manager && t === manager && (action === "setWebhook" || action === "deleteWebhook")) {
+    return bad("Manager bot webhook is protected; use the durable webhook state flow.", 409);
+  }
 
   try {
     if (action === "getMe") {

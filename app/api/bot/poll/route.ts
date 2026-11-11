@@ -33,6 +33,15 @@ async function cleanWebhook(token: string) {
   return { removed: "" };
 }
 
+function managerToken() {
+  return String(process.env.ROLAX_MAIN_BOT_TOKEN || process.env.BOT_TOKEN || "").trim();
+}
+
+function isManagerBot(token: string) {
+  const configured = managerToken();
+  return Boolean(configured) && token === configured;
+}
+
 function buildMap(commands: BotCommand[] | undefined): Record<string, string> {
   const map: Record<string, string> = { ...DEFAULT_REPLIES };
   (commands || []).forEach(c => { if (c?.trigger && c?.reply && !map[c.trigger]) map[c.trigger] = c.reply; });
@@ -57,6 +66,12 @@ export async function POST(req: NextRequest) {
   const token = (body.token || "").trim();
   if (!/^\d{6,12}:[A-Za-z0-9_-]{20,60}$/.test(token)) {
     return NextResponse.json({ ok: false, error: "Valid bot token required" }, { status: 400 });
+  }
+  // The manager bot is webhook-driven. Never let the legacy browser polling
+  // endpoint delete its webhook, because that also removes the encrypted user
+  // snapshot carried in the webhook URL.
+  if (isManagerBot(token)) {
+    return NextResponse.json({ ok: false, protected: true, error: "Manager bot webhook is protected; polling is disabled." }, { status: 409 });
   }
 
   const map = buildMap(body.commands);
