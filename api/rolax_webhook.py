@@ -177,6 +177,10 @@ async def _process_update(payload: dict[str, Any], state_token: str = "", reques
         if isinstance(snapshot, dict):
             if isinstance(snapshot.get("website_users"), dict):
                 module._WEBHOOK_WEBSITE_USERS = dict(snapshot.get("website_users") or {})
+            if isinstance(snapshot.get("force_join_channels"), list):
+                module._WEBHOOK_FORCE_JOIN_CHANNELS = [
+                    str(value).strip() for value in snapshot.get("force_join_channels") or [] if str(value).strip()
+                ]
             if isinstance(snapshot.get("users"), dict):
                 local_users = module.get_users()
                 merged_users = module._merge_user_maps(local_users, snapshot.get("users") or {})

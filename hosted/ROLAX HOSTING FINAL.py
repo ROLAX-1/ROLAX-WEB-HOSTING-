@@ -95,7 +95,7 @@ REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 # Docker / Render / Fly volume ke liye e.g. "/data" likho.
 DATA_DIR_SETTING = ""
 
-VERSION = "3.33"
+VERSION = "3.34"
 # =====================================================================
 #   (isse neeche kuch badalne ki zaroorat nahi)
 # =====================================================================
@@ -322,6 +322,10 @@ _WEBHOOK_STATE_ENV = os.environ.get("ROLAX_WEBHOOK_STATE", "").strip()
 # Keep unknown website records intact when the Python bot exports its next
 # Telegram-user snapshot, otherwise a bot update could erase website plans.
 _WEBHOOK_WEBSITE_USERS: dict = {}
+# Force-join config must survive Vercel cold starts too. Keep an encrypted
+# snapshot copy and merge it with the local file instead of resetting to the
+# hard-coded default after every redeploy/update.
+_WEBHOOK_FORCE_JOIN_CHANNELS: list = []
 _WEBHOOK_STATE_MAX_CHARS = 7000
 
 
@@ -371,7 +375,7 @@ def _open_webhook_state(token: str) -> Optional[dict]:
 
 
 def _restore_webhook_state() -> None:
-    global _WEBHOOK_WEBSITE_USERS
+    global _WEBHOOK_WEBSITE_USERS, _WEBHOOK_FORCE_JOIN_CHANNELS
     if not _WEBHOOK_STATE_ENV:
         return
     snapshot = _open_webhook_state(_WEBHOOK_STATE_ENV)
@@ -380,6 +384,9 @@ def _restore_webhook_state() -> None:
     remote_website_users = snapshot.get("website_users")
     if isinstance(remote_website_users, dict):
         _WEBHOOK_WEBSITE_USERS = dict(remote_website_users)
+    remote_force_join = snapshot.get("force_join_channels")
+    if isinstance(remote_force_join, list):
+        _WEBHOOK_FORCE_JOIN_CHANNELS = [str(value).strip() for value in remote_force_join if str(value).strip()]
     remote_users = snapshot.get("users")
     if not isinstance(remote_users, dict) or not remote_users:
         return
@@ -396,10 +403,12 @@ _restore_webhook_state()
 def export_webhook_state() -> str:
     """Return the latest encrypted state snapshot for the adapter."""
     users = get_users()
+    force_join_channels = get_force_join()
     token = _seal_webhook_state({
         "version": 1,
         "users": users,
         "website_users": _WEBHOOK_WEBSITE_USERS,
+        "force_join_channels": force_join_channels,
     })
     if len(token) > _WEBHOOK_STATE_MAX_CHARS:
         logger.error("Telegram user snapshot is too large for webhook URL (%s chars)", len(token))
@@ -424,28 +433,38 @@ def is_admin(user_id: int) -> bool:
         return True
     return int(user_id) in get_admins()
 
-def get_force_join() -> list:
-    channels = load_json(FORCE_JOIN_FILE, [])
-    if not isinstance(channels, list):
-        channels = []
-    original = [str(channel).strip() for channel in channels]
+def _normalize_force_join(channels: list) -> list:
     normalized = []
-    for value in original:
-        if not value or value in REMOVED_FORCE_JOIN_CHANNELS:
-            continue
-        if value not in normalized:
-            normalized.append(value)
-
-    # Keep the configured required chat and remove the legacy chat even when
-    # an older force_join.json or migration marker already exists on disk.
-    for channel in REQUIRED_FORCE_JOIN_CHANNELS:
+    for channel in channels if isinstance(channels, list) else []:
         value = str(channel).strip()
         if value and value not in REMOVED_FORCE_JOIN_CHANNELS and value not in normalized:
             normalized.append(value)
+    return normalized
+
+
+def get_force_join() -> list:
+    """Load force-join additively from disk plus the encrypted webhook state.
+
+    Vercel's function filesystem is ephemeral. Before this merge, an admin
+    could add a channel successfully, then the next cold start loaded an empty
+    `force_join.json` and silently dropped that channel. The encrypted state is
+    now a recovery source; existing defaults and admin-added channels remain.
+    """
+    global _WEBHOOK_FORCE_JOIN_CHANNELS
+    disk_channels = load_json(FORCE_JOIN_FILE, [])
+    if not isinstance(disk_channels, list):
+        disk_channels = []
+    disk_clean = _normalize_force_join(disk_channels)
+    snapshot_clean = _normalize_force_join(_WEBHOOK_FORCE_JOIN_CHANNELS)
+    original = list(disk_clean)
+    normalized = _normalize_force_join(snapshot_clean + disk_clean + list(REQUIRED_FORCE_JOIN_CHANNELS))
 
     migration_missing = not os.path.exists(FORCE_JOIN_MIGRATION_FILE)
     if migration_missing or normalized != original:
         save_json(FORCE_JOIN_FILE, normalized)
+    # Keep the in-memory snapshot current even when the local filesystem is
+    # unavailable; export_webhook_state() will carry it to the next instance.
+    _WEBHOOK_FORCE_JOIN_CHANNELS = list(normalized)
     if migration_missing:
         try:
             with open(FORCE_JOIN_MIGRATION_FILE, "w", encoding="utf-8") as marker:
@@ -454,12 +473,13 @@ def get_force_join() -> list:
             logger.exception("Could not write force-join migration marker")
     return normalized
 
+
 def save_force_join(channels: list) -> None:
-    normalized = []
-    for channel in channels:
-        value = str(channel).strip()
-        if value and value not in normalized:
-            normalized.append(value)
+    global _WEBHOOK_FORCE_JOIN_CHANNELS
+    normalized = _normalize_force_join(channels)
+    # Do not let a local write remove the durable copy before the next
+    # webhook export. Required defaults are re-added by get_force_join().
+    _WEBHOOK_FORCE_JOIN_CHANNELS = list(normalized)
     save_json(FORCE_JOIN_FILE, normalized)
 
 def get_config() -> dict:
