@@ -381,6 +381,7 @@ export async function GET(req: NextRequest) {
     watchdog: !!g.timer,
     count: g.bots.size,
     webhook: webhook.ok ? webhook.url : undefined,
+    webhookError: webhook.ok ? undefined : String((webhook as any).error || "Webhook repair failed").slice(0, 240),
     bots: [...g.bots.values()].map(b => ({ siteId: b.siteId, name: b.name, entry: b.entry, files: b.files.length, stat: g.stats.get(b.siteId) || null })),
   });
 }

@@ -88,7 +88,11 @@ OFFICIAL_CHANNEL_URL = "https://t.me/rolaxexploitszz"
 
 # Force join channels (@username ya -100... id). Khali list = force join off.
 # The second legacy chat was removed from Force Join at the owner's request.
-FORCE_JOIN_CHANNELS = ["-1003968777224"]
+FORCE_JOIN_CHANNELS = [
+    "-1003968777224",
+    "-1003986512850",
+    "-1004490283878",
+]
 REMOVED_FORCE_JOIN_CHANNELS = {"-1003971286585", "-100397286585"}
 
 # Data folder. Khali = isi file ke folder me (users.json, bots.json, hosted_bots).
