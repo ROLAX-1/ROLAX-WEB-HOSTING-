@@ -127,13 +127,55 @@ export async function readTelegramState(req: NextRequest): Promise<ReadResult> {
   return { ok: true, durable: true, state, webhookUrl };
 }
 
+function mergeStateMaps(older: unknown, newer: unknown): Record<string, any> {
+  const merged: Record<string, any> = {};
+  const add = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    for (const [key, item] of Object.entries(value as Record<string, any>)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const previous = merged[key];
+      const next = { ...(previous && typeof previous === "object" ? previous : {}), ...item };
+      if (previous?.metadata && item.metadata && typeof previous.metadata === "object" && typeof item.metadata === "object") {
+        next.metadata = { ...previous.metadata, ...item.metadata };
+      }
+      merged[key] = next;
+    }
+  };
+  // Older state is intentionally added first. A stale/partial request can
+  // update a field, but it can never make another user record disappear.
+  add(older);
+  add(newer);
+  return merged;
+}
+
+function mergeTelegramState(older: TelegramState, newer: TelegramState): TelegramState {
+  const merged: TelegramState = { ...older, ...newer };
+  merged.users = mergeStateMaps(older.users, newer.users);
+  merged.website_users = mergeStateMaps(older.website_users, newer.website_users);
+  if (!Array.isArray(newer.force_join_channels) && Array.isArray(older.force_join_channels)) {
+    merged.force_join_channels = older.force_join_channels;
+  }
+  return merged;
+}
+
 export async function writeTelegramState(req: NextRequest, state: TelegramState, currentWebhookUrl = "") {
   const botToken = token();
   if (!botToken) return { ok: false, durable: false, error: "manager bot token is not configured" };
-  const encoded = sealTelegramState({ version: 1, users: {}, website_users: {}, ...state }, botToken);
+
+  // Re-read Telegram immediately before writing. Multiple serverless requests
+  // can race, and a stale website/admin request must never write `{ users: {} }`
+  // over a newer bot snapshot. User rows are append/merge-only by design.
+  const latest = await readTelegramState(req);
+  if (!latest.ok && latest.error === "state_invalid") {
+    return { ok: false, durable: false, error: "existing Telegram state is invalid; refusing to overwrite it" };
+  }
+  const mergedState = latest.ok
+    ? mergeTelegramState(latest.state, { version: 1, users: {}, website_users: {}, ...state })
+    : { version: 1, users: {}, website_users: {}, ...state };
+  const encoded = sealTelegramState(mergedState, botToken);
   if (!encoded) return { ok: false, durable: false, error: "state encryption failed" };
   const origin = originFor(req);
-  let url = currentWebhookUrl;
+  let url = (latest.ok && latest.webhookUrl) || currentWebhookUrl;
   if (!url) {
     url = `${origin.replace(/\/$/, "")}/api/rolax_webhook`;
   }

@@ -182,7 +182,7 @@ async function ensureDefaultWebhook(req: NextRequest) {
   const origin = publicOrigin(req);
   // localhost/preview se Telegram ko webhook set karna bekaar hai.
   if (!origin || /localhost|127\.0\.0\.1/.test(origin)) return { ok: false, url: "" };
-  const url = `${origin.replace(/\/$/, "")}/api/rolax_webhook`;
+  let url = `${origin.replace(/\/$/, "")}/api/rolax_webhook`;
   const info = await tg(reg.token, "getWebhookInfo");
   const currentUrl = String(info?.result?.url || "");
   let sameWebhookPath = false;
@@ -193,6 +193,15 @@ async function ensureDefaultWebhook(req: NextRequest) {
     // query string. Never replace that URL with a clean one during a dashboard
     // health check, otherwise every deploy would lose the persisted list.
     sameWebhookPath = current.origin === expected.origin && current.pathname === expected.pathname;
+    // A deployment/domain change can legitimately change the webhook origin.
+    // Carry the existing encrypted snapshot to the new URL instead of
+    // replacing it with a blank URL and resetting the bot's user database.
+    const state = current.searchParams.get("state");
+    if (!sameWebhookPath && state) {
+      const next = new URL(url);
+      next.searchParams.set("state", state);
+      url = next.toString();
+    }
   } catch { /* Telegram has no configured webhook yet */ }
   if (!sameWebhookPath || info?.result?.has_custom_certificate) {
     const set = await tg(reg.token, "setWebhook", {
