@@ -69,6 +69,11 @@ const g: G = ((globalThis as any).__rolaxBotWatchdog ||= {
   bots: new Map(), stats: new Map(), busy: new Set(), loaded: false,
 });
 
+// Telegram does not expose the configured secret_token in getWebhookInfo.
+// Reassert the manager webhook periodically so an older/manual webhook with a
+// wrong secret cannot silently accept updates but return 401 to our handler.
+let lastDefaultWebhookRepairAt = 0;
+
 function loadDefaultBotFromEnvironment() {
   const token = String(process.env.ROLAX_MAIN_BOT_TOKEN || "").trim();
   if (!/^\d{6,12}:[A-Za-z0-9_-]{20,60}$/.test(token) || g.bots.has(DEFAULT_SITE_ID)) return;
@@ -192,7 +197,8 @@ async function ensureDefaultWebhook(req: NextRequest) {
   const origin = publicOrigin(req);
   // localhost/preview se Telegram ko webhook set karna bekaar hai.
   if (!origin || /localhost|127\.0\.0\.1/.test(origin)) return { ok: false, url: "" };
-  let url = `${origin.replace(/\/$/, "")}/api/rolax_webhook`;
+  const responseUrl = `${origin.replace(/\/$/, "")}/api/rolax_webhook`;
+  let url = responseUrl;
   const info = await tg(reg.token, "getWebhookInfo");
   const currentUrl = String(info?.result?.url || "");
   let sameWebhookPath = false;
@@ -207,13 +213,18 @@ async function ensureDefaultWebhook(req: NextRequest) {
     // Carry the existing encrypted snapshot to the new URL instead of
     // replacing it with a blank URL and resetting the bot's user database.
     const state = current.searchParams.get("state");
-    if (!sameWebhookPath && state) {
+    // Preserve the state query even when the origin/path is already correct;
+    // the repair below must not turn a valid state-bearing URL into a blank
+    // one. The response itself still returns the clean URL and never exposes
+    // the encrypted snapshot to the browser.
+    if (state) {
       const next = new URL(url);
       next.searchParams.set("state", state);
       url = next.toString();
     }
   } catch { /* Telegram has no configured webhook yet */ }
-  if (!sameWebhookPath || info?.result?.has_custom_certificate) {
+  const shouldRepair = Date.now() - lastDefaultWebhookRepairAt > 60_000;
+  if (!sameWebhookPath || info?.result?.has_custom_certificate || shouldRepair) {
     const set = await tg(reg.token, "setWebhook", {
       url,
       drop_pending_updates: false,
@@ -221,7 +232,8 @@ async function ensureDefaultWebhook(req: NextRequest) {
       secret_token: webhookSecret(reg.token),
       allowed_updates: ["message", "edited_message", "callback_query", "channel_post"],
     });
-    if (!set?.ok) return { ok: false, url, error: set?.description || "setWebhook failed" };
+    if (!set?.ok) return { ok: false, url: responseUrl, error: set?.description || "setWebhook failed" };
+    lastDefaultWebhookRepairAt = Date.now();
   }
   // Webhook requests do not run PTB's post_init hook, so keep Telegram's
   // command menu in sync here as well. Keep the side menu minimal: only
@@ -231,7 +243,7 @@ async function ensureDefaultWebhook(req: NextRequest) {
       { command: "start", description: "Main menu / bot host karo" },
     ],
   });
-  return { ok: true, url };
+  return { ok: true, url: responseUrl };
 }
 
 async function tickBot(reg: Reg) {
