@@ -175,6 +175,16 @@ function publicOrigin(req: NextRequest) {
   return value.startsWith("http://") || value.startsWith("https://") ? value : `https://${value}`;
 }
 
+function isDefaultWebhookUrl(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  try {
+    return new URL(raw).pathname === "/api/rolax_webhook";
+  } catch {
+    return /\/api\/rolax_webhook(?:\?|$)/.test(raw);
+  }
+}
+
 /** Vercel par default ROLAX bot ko polling ke bajaye event-driven webhook do. */
 async function ensureDefaultWebhook(req: NextRequest) {
   const reg = g.bots.get(DEFAULT_SITE_ID);
@@ -241,7 +251,7 @@ async function tickBot(reg: Reg) {
     const wh = await tg(reg.token, "getWebhookInfo");
     // Preloaded ROLAX bot is event-driven on Vercel. Never delete its webhook
     // and never start getUpdates for it (that would create a 409 conflict).
-    if (reg.siteId === DEFAULT_SITE_ID && /\/api\/rolax_webhook$/.test(String(wh?.result?.url || ""))) {
+    if (reg.siteId === DEFAULT_SITE_ID && isDefaultWebhookUrl(wh?.result?.url)) {
       setStat(reg.siteId, { status: "online", username: me.result?.username, mode: "python" });
       return;
     }
